@@ -1,0 +1,15 @@
+[project]
+name = "mokioagent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "langchain>=1.2.15",
+    "langchain-openai>=1.1.13",
+    "langgraph>=1.1.6",
+    "langgraph-supervisor>=0.0.31",
+]
+
+[project.scripts]
+claw = "main:main"
