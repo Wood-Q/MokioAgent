@@ -24,10 +24,41 @@ mokioclaw = "mokioclaw.main:main"
 [dependency-groups]
 dev = [
     "pytest>=8.3.0",
+    "ruff>=0.12.0",
+    "ty>=0.0.31",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mokioclaw"]
 
 [tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+extend-exclude = ["*.jinja2"]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "I",
+    "B",
+    "UP",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["mokioclaw"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.ty.src]
+include = ["src", "tests"]
+
+[tool.ty.environment]
+root = ["./src"]

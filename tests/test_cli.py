@@ -5,7 +5,6 @@ from typer.testing import CliRunner
 import mokioclaw.cli.app as cli_app
 from mokioclaw.core.types import LoopOutcome
 
-
 runner = CliRunner()
 
 

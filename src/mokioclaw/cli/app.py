@@ -7,7 +7,6 @@ import typer
 from mokioclaw.core.loop import run_single_step
 from mokioclaw.providers.ollama_provider import default_model
 
-
 app = typer.Typer(
     context_settings={"help_option_names": ["-h", "--help"]},
     help="Single-step tool caller demo for Agent fundamentals.",
@@ -23,7 +22,8 @@ def _render_outcome(message: str, model: str) -> int:
         typer.echo(str(exc))
         typer.echo(
             "\nHint: for Ollama, set BASE_URL=http://localhost:11434 and "
-            "use a local model name such as --model qwen3.5:cloud or MODEL=qwen3.5:cloud."
+            "use a local model name such as --model qwen3.5:cloud or "
+            "MODEL=qwen3.5:cloud."
         )
         return 1
 

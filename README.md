@@ -94,6 +94,14 @@ uv run python main.py "把 ./demo/a.txt 移动到 ./archive/a.txt"
 - 执行的工具与参数
 - 工具执行结果
 
+## 开发命令
+
+```bash
+uv run --group dev pytest
+uv run --group dev ruff check .
+uv run --group dev ty check
+```
+
 ## 当前实现
 
 - CLI 层使用 `Typer`

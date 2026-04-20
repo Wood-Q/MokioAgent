@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
 import os
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any, cast
 from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
-
 
 _ENV_LOADED = False
 
@@ -71,7 +71,11 @@ def default_model() -> str:
 def build_chat_model(model: str) -> ChatOpenAI:
     # Kept in a dedicated provider module so we can replace this
     # with a true Ollama backend without touching loop/cli code.
-    return ChatOpenAI(model=model, temperature=0, **_provider_kwargs())
+    chat_openai = cast(Any, ChatOpenAI)
+    return cast(
+        ChatOpenAI,
+        chat_openai(model=model, temperature=0, **_provider_kwargs()),
+    )
 
 
 def invoke_chat(
