@@ -6,7 +6,7 @@ from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-TEMPLATE_NAME = "toolcall.jinja2"
+TEMPLATE_NAME = "react_system.jinja2"
 
 
 def _prompt_dir() -> Path:
@@ -26,14 +26,14 @@ def _build_environment() -> Environment:
 PROMPT_ENV = _build_environment()
 
 
-def load_toolcall_template() -> str:
+def load_react_template() -> str:
     path = _prompt_dir() / TEMPLATE_NAME
     if not path.exists():
         raise FileNotFoundError(f"Prompt template not found: {path}")
     return path.read_text(encoding="utf-8")
 
 
-def build_toolcall_system_prompt(tools: list[dict[str, Any]]) -> str:
+def build_react_system_prompt(tools: list[dict[str, Any]]) -> str:
     template = PROMPT_ENV.get_template(TEMPLATE_NAME)
     return template.render(
         tools_json=json.dumps(tools, ensure_ascii=False, indent=2),

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typer.testing import CliRunner
 
 import mokioclaw.cli.app as cli_app
-from mokioclaw.core.types import LoopOutcome
+from mokioclaw.core.types import LoopOutcome, ToolExecution
 
 runner = CliRunner()
 
@@ -14,37 +14,45 @@ def test_cli_prints_assistant_response(monkeypatch):
         "run_single_step",
         lambda message, model: LoopOutcome(
             need_tool=False,
-            raw='{"need_tool": false, "response": "你好"}',
+            raw="Human: 你好\nAI: 你好",
             response="你好",
+            memory=["User request: 你好", "Final answer: 你好"],
         ),
     )
 
     result = runner.invoke(cli_app.app, ["你好", "--model", "demo-model"])
 
     assert result.exit_code == 0
-    assert "=== Model ToolCall (raw) ===" in result.output
-    assert "=== Assistant Response ===" in result.output
+    assert "=== Agent Trace ===" in result.output
+    assert "=== Final Response ===" in result.output
     assert "你好" in result.output
 
 
-def test_cli_prints_tool_error(monkeypatch):
+def test_cli_prints_tool_steps(monkeypatch):
     monkeypatch.setattr(
         cli_app,
         "run_single_step",
         lambda message, model: LoopOutcome(
             need_tool=True,
-            raw='{"need_tool": true, "tool": "move_file"}',
-            tool="move_file",
-            arguments={"src": "a", "dst": "b"},
-            tool_error="boom",
+            raw="Human: 移动文件\nAI: planning next action",
+            response="文件已移动",
+            tool_calls=[
+                ToolExecution(
+                    name="move_file",
+                    arguments={"src": "a", "dst": "b"},
+                    result="Moved file from 'a' to 'b'.",
+                )
+            ],
+            memory=["User request: 移动文件", "Tool used: move_file"],
         ),
     )
 
     result = runner.invoke(cli_app.app, ["移动文件"])
 
-    assert result.exit_code == 1
-    assert "=== Tool Error ===" in result.output
-    assert "boom" in result.output
+    assert result.exit_code == 0
+    assert "=== Tool Steps ===" in result.output
+    assert "move_file" in result.output
+    assert "Moved file from 'a' to 'b'." in result.output
 
 
 def test_cli_prints_runtime_error(monkeypatch):

@@ -4,7 +4,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from mokioclaw.tools.file_tools import move_file
+from langchain_core.tools import StructuredTool
+
+from mokioclaw.tools.file_tools import file_tree, move_file
 
 
 @dataclass(frozen=True)
@@ -30,8 +32,34 @@ MOVE_FILE_TOOL = ToolDef(
     handler=move_file,
 )
 
+FILE_TREE_TOOL = ToolDef(
+    name="file_tree",
+    description="Return a plain-text file tree for a file or directory path.",
+    parameters={
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Root file or directory path to inspect.",
+            },
+            "max_depth": {
+                "type": "integer",
+                "description": "Maximum directory depth to expand. Defaults to 3.",
+            },
+            "show_hidden": {
+                "type": "boolean",
+                "description": "Whether to include hidden files and directories.",
+            },
+        },
+        "required": ["path"],
+        "additionalProperties": False,
+    },
+    handler=file_tree,
+)
+
 TOOLS: dict[str, ToolDef] = {
     MOVE_FILE_TOOL.name: MOVE_FILE_TOOL,
+    FILE_TREE_TOOL.name: FILE_TREE_TOOL,
 }
 
 
@@ -46,9 +74,12 @@ def tools_for_prompt() -> list[dict[str, Any]]:
     ]
 
 
-def execute_tool_call(tool_name: str, arguments: dict[str, Any]) -> str:
-    if tool_name not in TOOLS:
-        raise ValueError(f"Unknown tool: {tool_name}")
-
-    tool = TOOLS[tool_name]
-    return tool.handler(**arguments)
+def tools_for_agent() -> list[StructuredTool]:
+    return [
+        StructuredTool.from_function(
+            func=tool.handler,
+            name=tool.name,
+            description=tool.description,
+        )
+        for tool in TOOLS.values()
+    ]

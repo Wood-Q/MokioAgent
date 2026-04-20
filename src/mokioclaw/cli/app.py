@@ -9,7 +9,7 @@ from mokioclaw.providers.ollama_provider import default_model
 
 app = typer.Typer(
     context_settings={"help_option_names": ["-h", "--help"]},
-    help="Single-step tool caller demo for Agent fundamentals.",
+    help="Minimal ReAct agent demo for Agent fundamentals.",
     no_args_is_help=True,
 )
 
@@ -27,25 +27,28 @@ def _render_outcome(message: str, model: str) -> int:
         )
         return 1
 
-    typer.echo("=== Model ToolCall (raw) ===")
+    typer.echo("=== Agent Trace ===")
     typer.echo(outcome.raw)
-
-    if not outcome.need_tool:
-        typer.echo("\n=== Assistant Response ===")
-        typer.echo(outcome.response)
-        return 0
-
-    typer.echo("\n=== Execute Tool ===")
-    typer.echo(f"tool={outcome.tool}")
-    typer.echo(f"arguments={outcome.arguments}")
 
     if outcome.tool_error:
         typer.echo("\n=== Tool Error ===")
         typer.echo(outcome.tool_error)
         return 1
 
-    typer.echo("\n=== Tool Result ===")
-    typer.echo(outcome.tool_result)
+    if outcome.tool_calls:
+        typer.echo("\n=== Tool Steps ===")
+        for index, tool_call in enumerate(outcome.tool_calls, start=1):
+            typer.echo(f"{index}. tool={tool_call.name}")
+            typer.echo(f"   arguments={tool_call.arguments}")
+            typer.echo(f"   result={tool_call.result}")
+
+    if outcome.memory:
+        typer.echo("\n=== Memory Snapshot ===")
+        for item in outcome.memory:
+            typer.echo(f"- {item}")
+
+    typer.echo("\n=== Final Response ===")
+    typer.echo(outcome.response)
     return 0
 
 
@@ -54,6 +57,6 @@ def main(
     message: Annotated[str, typer.Argument(help="Natural language request")],
     model: Annotated[str, typer.Option(help="LLM model name")] = default_model(),
 ) -> None:
-    """Run a single-step tool-call loop from a natural language message."""
+    """Run a minimal ReAct agent loop from a natural language message."""
 
     raise typer.Exit(code=_render_outcome(message=message, model=model))

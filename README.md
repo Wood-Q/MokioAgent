@@ -1,13 +1,13 @@
 # mokio-claw
 
-从最小主干起步的 `mokioclaw` 项目。当前阶段实现的是单步 ToolCall，后续会按 Agent Loop、多 Agent、工程化等方向持续演进。
+从最小主干起步的 `mokioclaw` 项目。当前阶段已经从单步 ToolCall 升级为基于 LangChain `create_agent` 的最简 ReAct Agent。
 
 ## 当前能力
 
 - 接收用户自然语言
-- 让模型判断是否调用工具
-- 解析工具参数
-- 执行单个工具
+- 通过 ReAct 方式自行决定是否调用工具
+- 允许模型按需多步调用工具
+- 保留短期 state 和 memory 结构，便于后续扩展
 - 返回执行结果
 
 ## 项目结构
@@ -25,21 +25,20 @@ mokio-claw/
 │     ├─ core/
 │     │  ├─ loop.py
 │     │  ├─ context.py
-│     │  ├─ toolcall_decider.py
+│     │  ├─ memory.py
+│     │  ├─ state.py
 │     │  └─ types.py
+│     ├─ prompts/
+│     │  ├─ react_prompt.py
+│     │  └─ react_system.jinja2
 │     ├─ providers/
 │     │  └─ ollama_provider.py
 │     ├─ tools/
 │     │  ├─ registry.py
 │     │  └─ file_tools.py
-│     ├─ prompts/
-│     │  ├─ toolcall.jinja2
-│     │  └─ toolcall_prompt.py
-│     └─ utils/
-│        └─ json_utils.py
 └─ tests/
    ├─ test_cli.py
-   ├─ test_decider_utils.py
+   ├─ test_react_content.py
    ├─ test_provider_env.py
    └─ test_tools.py
 ```
@@ -90,9 +89,10 @@ uv run python main.py "把 ./demo/a.txt 移动到 ./archive/a.txt"
 
 程序会打印：
 
-- 模型原始 ToolCall JSON
-- 执行的工具与参数
-- 工具执行结果
+- Agent 的 ReAct 执行轨迹
+- 实际工具调用步骤
+- Memory 快照
+- 最终答复
 
 ## 开发命令
 
@@ -106,8 +106,10 @@ uv run --group dev ty check
 
 - CLI 层使用 `Typer`
 - Prompt 渲染使用 `Jinja2`
+- Agent Loop 使用 LangChain `create_agent`
 - 环境变量加载使用 `python-dotenv`
 
 ## 当前内置工具
 
 - `move_file(src, dst)`：将文件从源路径移动到目标路径
+- `file_tree(path, max_depth=3, show_hidden=False)`：获取文件或目录的树状结构
