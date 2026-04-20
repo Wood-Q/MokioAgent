@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
 import shutil
+from pathlib import Path
 
 
 def move_file(src: str, dst: str) -> str:
@@ -16,3 +16,4 @@ def move_file(src: str, dst: str) -> str:
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(source), str(target))
     return f"Moved file from '{source}' to '{target}'."
+

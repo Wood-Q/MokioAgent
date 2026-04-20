@@ -1,15 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
-name = "mokioagent"
+name = "mokio-claw"
 version = "0.1.0"
-description = "Add your description here"
+description = "A minimal claw project that evolves from one-step tool calls."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "jinja2>=3.1.6",
     "langchain>=1.2.15",
     "langchain-openai>=1.1.13",
     "langgraph>=1.1.6",
     "langgraph-supervisor>=0.0.31",
+    "python-dotenv>=1.1.1",
+    "typer>=0.16.0",
 ]
 
 [project.scripts]
-claw = "main:main"
+mokioclaw = "mokioclaw.main:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mokioclaw"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
