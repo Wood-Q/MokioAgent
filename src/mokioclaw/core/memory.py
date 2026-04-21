@@ -15,6 +15,7 @@ def build_initial_state(user_input: str) -> MokioclawState:
         messages=[HumanMessage(content=user_input)],
         user_input=user_input,
         short_term_memory=[f"User request: {user_input}"],
+        file_snapshots={},
     )
 
 
