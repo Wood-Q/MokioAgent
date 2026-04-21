@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from langchain.agents import create_agent
+from collections.abc import Callable, Sequence
+from typing import Any, cast
+
+from langchain_core.messages import AIMessage, BaseMessage, SystemMessage
+from langchain_core.tools import BaseTool
+from langgraph.graph import END, START, StateGraph
+from langgraph.prebuilt import ToolNode, tools_condition
 
 from mokioclaw.core.context import RunContext
 from mokioclaw.core.memory import (
@@ -17,20 +23,56 @@ from mokioclaw.providers.ollama_provider import build_chat_model
 from mokioclaw.tools.registry import tools_for_agent, tools_for_prompt
 
 
+def build_react_graph(model: str):
+    tools = tools_for_agent()
+    builder = StateGraph(cast(Any, MokioclawState))
+    builder.add_node(
+        "agent",
+        cast(Any, _build_agent_node(model=model, tools=tools)),
+    )
+    builder.add_node("tools", ToolNode(tools))
+    builder.add_edge(START, "agent")
+    builder.add_conditional_edges(
+        "agent",
+        tools_condition,
+        {
+            "tools": "tools",
+            "__end__": END,
+        },
+    )
+    builder.add_edge("tools", "agent")
+    return builder.compile(name="mokioclaw-react-graph")
+
+
+def _build_agent_node(
+    *, model: str, tools: Sequence[BaseTool]
+) -> Callable[[MokioclawState], dict[str, list[BaseMessage]]]:
+    llm = build_chat_model(model).bind_tools(tools)
+    system_message = SystemMessage(
+        content=build_react_system_prompt(tools_for_prompt())
+    )
+
+    def call_model(state: MokioclawState) -> dict[str, list[BaseMessage]]:
+        response = llm.invoke([system_message, *state["messages"]])
+        return {"messages": [_coerce_ai_message(response)]}
+
+    return call_model
+
+
+def _coerce_ai_message(message: BaseMessage) -> AIMessage:
+    if isinstance(message, AIMessage):
+        return message
+    raise TypeError(f"Expected AIMessage from chat model, got {type(message).__name__}")
+
+
 def run_single_step(
     user_input: str,
     model: str = "gpt-4o-mini",
     context: RunContext | None = None,
 ) -> LoopOutcome:
     ctx = context or RunContext(user_input=user_input, model=model)
-    agent = create_agent(
-        model=build_chat_model(ctx.model),
-        tools=tools_for_agent(),
-        system_prompt=build_react_system_prompt(tools_for_prompt()),
-        state_schema=MokioclawState,
-        name="mokioclaw-react-agent",
-    )
-    result = agent.invoke(build_initial_state(ctx.user_input))
+    graph = build_react_graph(ctx.model)
+    result = graph.invoke(build_initial_state(ctx.user_input))
     messages = result["messages"]
     tool_calls = collect_tool_executions(messages)
 

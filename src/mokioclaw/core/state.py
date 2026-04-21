@@ -1,11 +1,14 @@
 from __future__ import annotations
 
-from langchain.agents import AgentState
+from typing import Annotated, NotRequired, Required, TypedDict
+
+from langchain_core.messages import AnyMessage
+from langgraph.graph import add_messages
 
 
-class MokioclawState(AgentState, total=False):
+class MokioclawState(TypedDict, total=False):
     """Short-term state used during a single ReAct-style agent run."""
 
-    user_input: str
-    short_term_memory: list[str]
-
+    messages: Required[Annotated[list[AnyMessage], add_messages]]
+    user_input: NotRequired[str]
+    short_term_memory: NotRequired[list[str]]

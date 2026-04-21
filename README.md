@@ -1,6 +1,6 @@
 # mokio-claw
 
-从最小主干起步的 `mokioclaw` 项目。当前阶段已经从单步 ToolCall 升级为基于 LangChain `create_agent` 的最简 ReAct Agent。
+从最小主干起步的 `mokioclaw` 项目。当前阶段已经从单步 ToolCall 升级为基于 LangGraph 的最简 ReAct Agent。
 
 ## 当前能力
 
@@ -38,6 +38,7 @@ mokio-claw/
 │     │  └─ file_tools.py
 └─ tests/
    ├─ test_cli.py
+   ├─ test_loop.py
    ├─ test_react_content.py
    ├─ test_provider_env.py
    └─ test_tools.py
@@ -106,7 +107,7 @@ uv run --group dev ty check
 
 - CLI 层使用 `Typer`
 - Prompt 渲染使用 `Jinja2`
-- Agent Loop 使用 LangChain `create_agent`
+- Agent Loop 使用 LangGraph `StateGraph`
 - 环境变量加载使用 `python-dotenv`
 
 ## 当前内置工具
