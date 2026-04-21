@@ -9,10 +9,13 @@ from mokioclaw.core.memory import (
     extract_final_response,
     render_message_trace,
 )
-from mokioclaw.prompts.react_prompt import build_react_system_prompt
+from mokioclaw.prompts.react_prompt import (
+    build_planner_system_prompt,
+    build_react_system_prompt,
+)
 
 
-def test_build_react_system_prompt_includes_tools_json():
+def test_build_executor_system_prompt_includes_tools_json():
     prompt = build_react_system_prompt(
         [
             {
@@ -22,7 +25,24 @@ def test_build_react_system_prompt_includes_tools_json():
             }
         ]
     )
-    assert "ReAct" in prompt
+    assert "Executor" in prompt
+    assert "Plan & Execute" in prompt
+    assert '"name": "move_file"' in prompt
+
+
+def test_build_planner_system_prompt_includes_json_contract():
+    prompt = build_planner_system_prompt(
+        [
+            {
+                "name": "move_file",
+                "description": "Move a file.",
+                "parameters": {"type": "object"},
+            }
+        ]
+    )
+    assert "Planner" in prompt
+    assert '"steps"' in prompt
+    assert '"final_response"' in prompt
     assert '"name": "move_file"' in prompt
 
 

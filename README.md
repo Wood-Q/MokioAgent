@@ -1,14 +1,15 @@
 # mokio-claw
 
-从最小主干起步的 `mokioclaw` 项目。当前阶段已经从单步 ToolCall 升级为基于 LangGraph 的最简 ReAct Agent。
+从最小主干起步的 `mokioclaw` 项目。当前阶段已经从最小 ToolCall / ReAct 基线，推进到基于 LangGraph 的单 Agent Plan & Execute 形态。
 
 ## 当前能力
 
 - 接收用户自然语言
-- 通过 ReAct 方式自行决定是否调用工具
-- 允许模型按需多步调用工具
-- 保留短期 state 和 memory 结构，便于后续扩展
-- 返回执行结果
+- 支持 CLI 持续多轮对话，直到输入 `/exit` 或 `/quit`
+- 先由 Planner 生成步骤，或在信息不足时直接提问 / 直接答复
+- 由 Executor 聚焦当前步骤，并按需多步调用工具
+- 由 Finalizer 汇总执行结果，生成对用户的最终答复
+- 保留 graph state、短期 memory、文件读取快照，便于继续向 Notepad / Todo / Reflection 演化
 
 ## 项目结构
 
@@ -30,12 +31,14 @@ mokio-claw/
 │     │  └─ types.py
 │     ├─ prompts/
 │     │  ├─ react_prompt.py
-│     │  └─ react_system.jinja2
+│     │  ├─ planner_system.jinja2
+│     │  ├─ react_system.jinja2
+│     │  └─ finalizer_system.jinja2
 │     ├─ providers/
 │     │  └─ ollama_provider.py
 │     ├─ tools/
 │     │  ├─ registry.py
-│     │  └─ file_tools.py
+│     │  ├─ file_tools.py
 │     │  └─ workspace_tools.py
 └─ tests/
    ├─ test_cli.py
@@ -118,12 +121,35 @@ uv run --group dev ruff check .
 uv run --group dev ty check
 ```
 
+## 当前编排
+
+当前主循环已经不是单层 ReAct，而是显式的 LangGraph Plan & Execute workflow：
+
+```text
+START
+  -> planner
+  -> executor
+  -> tools <-> executor
+  -> advance
+  -> finalizer
+  -> END
+```
+
+各阶段职责：
+
+- `planner`：把用户请求转成 1 到 5 个可执行步骤；如果不需要执行或信息不足，则直接返回答复 / 澄清问题
+- `executor`：只聚焦当前步骤，必要时调用工具，并在该步骤完成后给出简短步骤结果
+- `tools`：通过 LangGraph `ToolNode` 执行工具调用
+- `advance`：更新 `completed_steps` 和 `current_step_index`
+- `finalizer`：根据计划、已完成步骤和工具结果生成最终答复
+
 ## 当前实现
 
 - CLI 层使用 `Typer`
-- Prompt 渲染使用 `Jinja2`
+- Prompt 渲染使用 `Jinja2`，并拆分为 Planner / Executor / Finalizer 三类 prompt
 - Agent Loop 使用 LangGraph `StateGraph`
 - Tool 执行使用 LangGraph `ToolNode`
+- Graph state 中维护 `plan`、`completed_steps`、`current_step_index`、`final_response`、`turn_events`
 - 对编辑类工具保存文件读取快照，并在写回前检查过期状态
 - 环境变量加载使用 `python-dotenv`
 
@@ -131,6 +157,6 @@ uv run --group dev ty check
 
 - `move_file(src, dst)`：将文件从源路径移动到目标路径
 - `file_tree(path, max_depth=3, show_hidden=False)`：获取文件或目录的树状结构
-- `file_edit(path, old_string, new_string, replace_all=False)`：在已读取且未过期的文本文件上安全生成 patch 并写回
+- `file_edit(path, old_string, new_string, replace_all=False)`：仅允许在“当前 run 已读过且未过期”的文本文件上安全生成 patch 并写回
 - `file_write(path, content, overwrite=False)`：新建文件或整文件覆盖
-- `bash(command, cwd=".", timeout_seconds=20)`：执行受限的 search / read / list 类 shell 命令
+- `bash(command, cwd=".", timeout_seconds=20)`：执行受限的 search / read / list 类 shell 命令，并为读取过的文件记录快照

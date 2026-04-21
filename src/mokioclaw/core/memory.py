@@ -16,6 +16,11 @@ def build_initial_state(user_input: str) -> MokioclawState:
         user_input=user_input,
         short_term_memory=[f"User request: {user_input}"],
         file_snapshots={},
+        plan=[],
+        completed_steps=[],
+        current_step_index=0,
+        final_response="",
+        turn_events=[],
     )
 
 
@@ -97,6 +102,14 @@ def render_message_trace(messages: Sequence[BaseMessage]) -> str:
                 f"Tool Result [{tool_name}]: {_stringify_content(message.content)}"
             )
 
+    return "\n".join(lines)
+
+
+def render_turn_trace(events: Sequence[str], messages: Sequence[BaseMessage]) -> str:
+    lines = [*events]
+    message_trace = render_message_trace(messages)
+    if message_trace:
+        lines.append(message_trace)
     return "\n".join(lines)
 
 
