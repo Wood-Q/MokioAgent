@@ -176,14 +176,38 @@ def test_session_preserves_multi_turn_history(monkeypatch):
     )
 
     session = loop.MokioclawSession(model="demo-model")
-    first = session.run_turn("你好")
-    second = session.run_turn("继续")
+    first = session.run_turn("请简短回答当前会话里有几条用户消息。")
+    second = session.run_turn("请再回答一次。")
 
     assert first.response == "目前会话里有 1 条用户消息。"
     assert second.response == "目前会话里有 2 条用户消息。"
     assert "Planner: returned a direct response without execution." in first.raw
     assert session.state is not None
     assert len(session.state["messages"]) == 4
+
+
+def test_casual_chat_turn_skips_plan_execute_graph(monkeypatch):
+    class CasualChatModel:
+        def invoke(self, messages: list[object]) -> AIMessage:
+            assert isinstance(messages[0], SystemMessage)
+            assert "普通聊天" in str(messages[0].content)
+            return AIMessage(content="你好，我在。")
+
+    class FakeGraph:
+        def invoke(self, input_state, config=None):
+            raise AssertionError("graph should not be used for casual chat")
+
+    monkeypatch.setattr(loop, "build_plan_execute_graph", lambda model: FakeGraph())
+    monkeypatch.setattr(loop, "build_chat_model", lambda model: CasualChatModel())
+
+    session = loop.MokioclawSession(model="demo-model")
+    outcome = session.run_turn("你好")
+
+    assert outcome.need_tool is False
+    assert outcome.response == "你好，我在。"
+    assert "normal conversation" in outcome.raw
+    assert session.state is not None
+    assert len(session.state["messages"]) == 2
 
 
 def test_run_single_step_can_organize_workspace_with_todos_and_notepad(

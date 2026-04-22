@@ -97,6 +97,19 @@ def test_cli_prints_runtime_error(monkeypatch):
     assert "--model qwen3.5:cloud" in result.output
 
 
+def test_cli_uses_textual_ui_by_default_in_interactive_mode(monkeypatch):
+    monkeypatch.setattr(cli_app, "_stdin_is_interactive", lambda: True)
+    monkeypatch.setattr(
+        cli_app,
+        "run_textual_chat",
+        lambda message, model: 0,
+    )
+
+    result = runner.invoke(cli_app.app, ["帮我整理一下 archive 和 demo"])
+
+    assert result.exit_code == 0
+
+
 def test_cli_runs_interactive_chat_until_exit(monkeypatch):
     class FakeSession(MokioclawSession):
         def __init__(self, model: str):
@@ -141,7 +154,7 @@ def test_cli_runs_interactive_chat_until_exit(monkeypatch):
 
     result = runner.invoke(
         cli_app.app,
-        ["帮我整理一下 archive 和 demo"],
+        ["帮我整理一下 archive 和 demo", "--ui", "plain"],
         input="按主题分类\n/exit\n",
     )
 

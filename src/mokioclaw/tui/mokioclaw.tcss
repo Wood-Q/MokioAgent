@@ -1,0 +1,231 @@
+Screen {
+    background: #f5f2ec;
+    color: #26211d;
+    padding: 0 1;
+}
+
+Header {
+    dock: top;
+    background: #f5f2ec;
+    color: #3b342e;
+    border-bottom: solid #d7d1c7;
+}
+
+Footer {
+    dock: bottom;
+    background: #f5f2ec;
+    color: #8e877f;
+    border-top: solid #d7d1c7;
+}
+
+#shell {
+    height: 1fr;
+    padding: 0 0 1 0;
+}
+
+#conversation-zone {
+    width: 2fr;
+    min-width: 0;
+    margin-right: 1;
+}
+
+#sidebar-zone {
+    width: 1fr;
+    min-width: 30;
+    max-width: 46;
+}
+
+#conversation-title,
+#sidebar-title {
+    color: #6f665d;
+    text-style: bold;
+    padding: 0 1;
+    margin-bottom: 1;
+}
+
+#chat-scroll {
+    height: 1fr;
+    border: round #ea7b2f;
+    background: #fbf8f3;
+    padding: 1;
+}
+
+.chat-card {
+    width: 100%;
+    height: auto;
+    margin-bottom: 1;
+    padding: 0 1 1 1;
+    border: round #d8d1c7;
+    background: #fffdf9;
+}
+
+.chat-card .chat-kicker {
+    color: #5d554d;
+    text-style: bold;
+    padding: 0 0 1 0;
+}
+
+.chat-card .chat-plain,
+.chat-card .chat-markdown {
+    color: #26211d;
+}
+
+.chat-card.user {
+    border: round #ea7b2f 65%;
+}
+
+.chat-card.user .chat-kicker {
+    color: #bf6431;
+}
+
+.chat-card.assistant {
+    border: round #d8d1c7;
+}
+
+.chat-card.assistant .chat-kicker {
+    color: #35302b;
+}
+
+.chat-card.system,
+.chat-card.thinking {
+    border: round #ea7b2f 35%;
+    background: #fcfaf6;
+}
+
+.chat-card.error {
+    border: round #d86255 70%;
+    background: #fff7f5;
+}
+
+#composer-shell {
+    height: auto;
+    margin-top: 1;
+    padding: 0 1 1 1;
+    border: round #ea7b2f;
+    background: #fbf8f3;
+}
+
+#composer-help {
+    color: #7f766e;
+    height: auto;
+    padding: 1 0 0 0;
+}
+
+#composer-row {
+    height: auto;
+    min-height: 1;
+    max-height: 5;
+    margin-top: 1;
+    padding: 0;
+    border-top: solid #ddd6cc;
+    align: left top;
+}
+
+#composer-prefix {
+    width: 3;
+    color: #bf6431;
+    text-style: bold;
+    padding: 0 0 0 1;
+}
+
+#chat-input {
+    width: 1fr;
+    height: 1;
+    min-height: 1;
+    max-height: 5;
+    border: none;
+    background: transparent;
+    color: #26211d;
+    padding: 0;
+}
+
+#chat-input:focus {
+    background: transparent;
+}
+
+#chat-input:disabled {
+    color: #9d958c;
+}
+
+.side-panel {
+    margin-bottom: 1;
+    padding: 1;
+    border: round #ea7b2f 35%;
+    background: #fbf8f3;
+    height: 1fr;
+}
+
+.panel-title {
+    color: #bf6431;
+    text-style: bold;
+    padding: 0 0 1 0;
+}
+
+.panel-scroll {
+    height: 1fr;
+}
+
+.verify-panel {
+    height: auto;
+}
+
+.hidden {
+    display: none;
+}
+
+.empty-panel-message {
+    color: #9a9289;
+    padding: 1 0;
+}
+
+.todo-card,
+.note-card {
+    width: 100%;
+    height: auto;
+    margin-bottom: 1;
+    padding: 0 1 1 1;
+    border: round #e0d8ce;
+    background: #fffdf9;
+}
+
+.todo-card.completed {
+    border: round #d6cfc5;
+}
+
+.todo-card.in_progress {
+    border: round #ea7b2f 65%;
+}
+
+.todo-card.pending {
+    border: round #dfd7ce;
+}
+
+.todo-kicker,
+.note-kicker {
+    text-style: bold;
+    padding: 0 0 1 0;
+}
+
+.todo-kicker {
+    color: #5f564d;
+}
+
+.todo-content {
+    color: #2a241f;
+}
+
+.note-card {
+    border: round #ea7b2f 30%;
+}
+
+.note-kicker {
+    color: #b55c3a;
+}
+
+.note-markdown {
+    color: #2a241f;
+}
+
+#verification-text {
+    color: #8e3f33;
+}

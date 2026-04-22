@@ -34,6 +34,85 @@ from mokioclaw.tools.registry import tools_for_agent, tools_for_prompt
 
 DEFAULT_RECURSION_LIMIT = 40
 MAX_REPEATED_CLARIFICATION_ATTEMPTS = 2
+CASUAL_CHAT_SYSTEM_PROMPT = """
+你是 Mokioclaw。
+
+当前这轮消息是普通聊天，不是文件整理或工具执行任务。
+请自然、简洁地用和用户相同的语言回复：
+- 不要把问候、感谢或自我介绍请求转成任务澄清
+- 不要追问任务范围、路径或优先级
+- 不要主动提到计划、工具、工作流或权限检查
+- 如果用户在问你是谁或能做什么，可以简短说明你既能聊天，也能帮助处理代码和工作区任务
+""".strip()
+CASUAL_CHAT_EXACT_INPUTS = {
+    "hi",
+    "hello",
+    "hey",
+    "thanks",
+    "thankyou",
+    "你好",
+    "您好",
+    "嗨",
+    "哈喽",
+    "早上好",
+    "上午好",
+    "中午好",
+    "下午好",
+    "晚上好",
+    "谢谢",
+    "多谢",
+    "谢了",
+    "辛苦了",
+    "在吗",
+    "你是谁",
+    "你会什么",
+    "你能做什么",
+    "介绍一下你自己",
+    "介绍下你自己",
+}
+TASK_INTENT_MARKERS = (
+    "./",
+    "../",
+    ".txt",
+    ".md",
+    ".py",
+    "/",
+    "\\",
+    "archive",
+    "demo",
+    "todo",
+    "notepad",
+    "tool",
+    "bash",
+    "文件",
+    "目录",
+    "文件夹",
+    "路径",
+    "重命名",
+    "归类",
+    "整理",
+    "移动",
+    "新建",
+    "创建",
+    "修改",
+    "编辑",
+    "写入",
+    "读取",
+    "查看",
+    "检查",
+    "搜索",
+    "执行",
+    "规划",
+    "总结",
+    "rename",
+    "move",
+    "edit",
+    "write",
+    "read",
+    "organize",
+    "classify",
+    "search",
+)
 
 
 @dataclass(frozen=True)
@@ -404,6 +483,33 @@ def _looks_like_clarification(text: str) -> bool:
     return any(marker in lowered for marker in clarification_markers)
 
 
+def _looks_like_casual_chat(user_input: str) -> bool:
+    stripped = user_input.strip()
+    if not stripped:
+        return False
+
+    lowered = stripped.casefold()
+    if any(marker in lowered or marker in stripped for marker in TASK_INTENT_MARKERS):
+        return False
+
+    normalized = re.sub(r"[\s\W_]+", "", lowered)
+    if normalized in CASUAL_CHAT_EXACT_INPUTS:
+        return True
+
+    chinese_greetings = ("你好", "您好", "嗨", "哈喽")
+    chinese_thanks = ("谢谢", "多谢", "谢了", "辛苦了")
+    if any(normalized.startswith(item) for item in chinese_greetings) and len(
+        normalized
+    ) <= 4:
+        return True
+    if any(normalized.startswith(item) for item in chinese_thanks) and len(
+        normalized
+    ) <= 4:
+        return True
+
+    return False
+
+
 def _infer_missing_information(text: str) -> list[str]:
     lowered = text.casefold()
     if "主题" in text or "分类" in text:
@@ -613,6 +719,9 @@ class MokioclawSession:
         self.state = None
 
     def run_turn(self, user_input: str) -> LoopOutcome:
+        if _looks_like_casual_chat(user_input):
+            return self._run_casual_turn(user_input)
+
         input_state, prior_message_count = self._prepare_turn_state(user_input)
         try:
             result = cast(
@@ -654,6 +763,68 @@ class MokioclawSession:
             notepad=list(result.get("notepad", [])) or None,
             memory=build_short_term_memory(user_input, current_turn_messages),
             verification_nudge=result.get("verification_nudge") or None,
+        )
+
+    def _run_casual_turn(self, user_input: str) -> LoopOutcome:
+        human_message = HumanMessage(content=user_input)
+        prior_messages = [*self.state["messages"]] if self.state else []
+        llm = build_chat_model(self.model)
+        ai_message = _coerce_ai_message(
+            llm.invoke(
+                [
+                    SystemMessage(content=CASUAL_CHAT_SYSTEM_PROMPT),
+                    *prior_messages,
+                    human_message,
+                ]
+            )
+        )
+        response_text = _stringify_content(ai_message.content)
+        turn_messages = [human_message, ai_message]
+
+        if self.state is None:
+            next_state = build_initial_state(user_input)
+            next_state["messages"].append(ai_message)
+            next_state["turn_events"] = [
+                "Chat: handled this turn as normal conversation."
+            ]
+            next_state["final_response"] = response_text
+            self.state = next_state
+        else:
+            self.state = cast(
+                MokioclawState,
+                {
+                    **self.state,
+                    "messages": [*self.state["messages"], *turn_messages],
+                    "user_input": user_input,
+                    "short_term_memory": [
+                        *self.state.get("short_term_memory", []),
+                        f"User request: {user_input}",
+                    ],
+                    "plan": [],
+                    "completed_steps": [],
+                    "current_step_index": 0,
+                    "todos": [],
+                    "todo_snapshot": [],
+                    "notepad": [],
+                    "clarification_attempts": 0,
+                    "last_clarification_signature": "",
+                    "final_response": response_text,
+                    "verification_nudge": "",
+                    "turn_events": [
+                        "Chat: handled this turn as normal conversation."
+                    ],
+                },
+            )
+
+        return LoopOutcome(
+            need_tool=False,
+            raw=render_turn_trace(self.state.get("turn_events", []), turn_messages),
+            response=response_text,
+            tool_calls=[],
+            todos=None,
+            notepad=None,
+            memory=build_short_term_memory(user_input, turn_messages),
+            verification_nudge=None,
         )
 
     def _prepare_turn_state(

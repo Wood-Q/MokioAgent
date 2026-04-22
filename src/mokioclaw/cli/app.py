@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from enum import StrEnum
 from typing import Annotated
 
 import typer
@@ -9,6 +10,7 @@ from mokioclaw.core.loop import MokioclawSession, run_single_step
 from mokioclaw.core.memory import render_notepad, render_todo_panel
 from mokioclaw.core.types import LoopOutcome
 from mokioclaw.providers.ollama_provider import default_model
+from mokioclaw.tui.app import run_textual_chat
 
 app = typer.Typer(
     context_settings={"help_option_names": ["-h", "--help"]},
@@ -19,6 +21,12 @@ app = typer.Typer(
 EXIT_COMMANDS = {"/exit", "/quit", "exit", "quit"}
 HELP_COMMANDS = {"/help", "help"}
 CLEAR_COMMANDS = {"/clear"}
+
+
+class UIChoice(StrEnum):
+    AUTO = "auto"
+    PLAIN = "plain"
+    TEXTUAL = "textual"
 
 
 def _render_verbose_outcome(outcome: LoopOutcome) -> int:
@@ -76,6 +84,13 @@ def _render_outcome(message: str, model: str) -> int:
     except Exception as exc:
         return _render_runtime_error(exc)
     return _render_verbose_outcome(outcome)
+
+
+def _run_textual(message: str | None, model: str) -> int:
+    try:
+        return run_textual_chat(message=message, model=model)
+    except Exception as exc:
+        return _render_runtime_error(exc)
 
 
 def _stdin_is_interactive() -> bool:
@@ -158,10 +173,19 @@ def main(
             help="Run as a persistent chat session or a single-turn command.",
         ),
     ] = True,
+    ui: Annotated[
+        UIChoice,
+        typer.Option(
+            "--ui",
+            help="Interactive interface mode: auto, textual, or plain.",
+        ),
+    ] = UIChoice.AUTO,
 ) -> None:
     """Run Mokioclaw as a one-shot command or an interactive chat session."""
 
     if chat and _stdin_is_interactive():
+        if ui in {UIChoice.AUTO, UIChoice.TEXTUAL}:
+            raise typer.Exit(code=_run_textual(message=message, model=model))
         raise typer.Exit(code=_run_chat_session(message=message, model=model))
     if message is None:
         typer.echo("A message is required in one-shot mode.")

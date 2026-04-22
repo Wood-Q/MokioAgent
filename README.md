@@ -6,6 +6,9 @@
 
 - 接收用户自然语言
 - 支持 CLI 持续多轮对话，直到输入 `/exit` 或 `/quit`
+- 交互模式默认使用 Textual TUI，提供更接近 Claude Code 风格的浅色终端界面
+- 简单问候、寒暄、感谢或“你是谁 / 你能做什么”这类输入会直接按聊天处理，不会误触发任务澄清
+- 底部输入区默认保持单行高度，输入变成长消息时会按行数小幅自适应增长
 - 先由 Planner 生成步骤，或在信息不足时直接提问 / 直接答复
 - 澄清问题会明确指出“缺什么信息、该怎么回答”，避免泛泛地说“需要更多信息”
 - 由 Executor 聚焦当前步骤，并按需多步调用工具
@@ -46,12 +49,17 @@ mokio-claw/
 │     │  ├─ file_tools.py
 │     │  ├─ session_tools.py
 │     │  └─ workspace_tools.py
+│     └─ tui/
+│        ├─ __init__.py
+│        ├─ app.py
+│        └─ mokioclaw.tcss
 └─ tests/
    ├─ test_cli.py
    ├─ test_loop.py
    ├─ test_react_content.py
    ├─ test_provider_env.py
    ├─ test_session_tools.py
+   ├─ test_tui.py
    ├─ test_tools.py
    └─ test_workspace_tools.py
 ```
@@ -90,7 +98,14 @@ uv run mokioclaw "把 ./demo/a.txt 移动到 ./archive/a.txt"
 
 在终端里默认会进入持续对话模式。Agent 如果需要继续确认信息，会直接追问；你可以继续输入回复，直到输入 `/exit` 或 `/quit` 结束。
 
-当任务进入执行阶段时，CLI 会额外展示 Todo 面板、NotePad，以及必要时的 verification nudge。
+当任务进入执行阶段时，Textual 界面会额外展示：
+
+- 对话主面板
+- Todo 面板
+- Markdown 渲染的 NotePad 卡片
+- verification nudge
+
+平时如果只是输入 `你好`、`谢谢`、`你是谁` 这类内容，则会直接正常聊天，不会自动进入任务执行流。
 
 也可以不带初始消息，直接进入交互会话：
 
@@ -102,6 +117,12 @@ uv run mokioclaw
 
 ```bash
 uv run mokioclaw --one-shot "把 ./demo/a.txt 移动到 ./archive/a.txt"
+```
+
+如果你想回退到原来的纯文本交互模式，可以显式使用：
+
+```bash
+uv run mokioclaw --ui plain "帮我整理当前目录"
 ```
 
 如果你用的是本地 Ollama，模型名要换成你本机已有的模型，例如：
@@ -121,6 +142,8 @@ uv run python main.py "把 ./demo/a.txt 移动到 ./archive/a.txt"
 - `/help`：查看命令
 - `/clear`：清空当前会话上下文
 - `/exit` / `/quit`：结束会话
+- `Enter`：发送消息
+- `Shift+Enter`：在输入区换行
 
 ## 开发命令
 
@@ -153,9 +176,13 @@ START
 - `advance`：更新 `completed_steps`、`current_step_index`，并自动同步 todo 勾选状态
 - `finalizer`：根据计划、已完成步骤和工具结果生成最终答复
 
+在交互层上，当前默认使用 Textual 的 `App + CSS_PATH + Header/Footer + Input + Markdown + Workers` 组合来承载会话界面。
+界面样式采用浅色中性底色，橙色主要作为边框和分隔强调；底部 composer 默认是一行，并在多行输入时小幅增高，尽量把主要空间留给对话区。
+
 ## 当前实现
 
 - CLI 层使用 `Typer`
+- 交互 UI 使用 `Textual`
 - Prompt 渲染使用 `Jinja2`，并拆分为 Planner / Executor / Finalizer 三类 prompt
 - Agent Loop 使用 LangGraph `StateGraph`
 - Tool 执行使用 LangGraph `ToolNode`
