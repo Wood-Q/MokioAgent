@@ -12,6 +12,7 @@ class FakeSession:
     def __init__(self) -> None:
         self.turns: list[str] = []
         self.reset_calls = 0
+        self.compact_calls: list[str | None] = []
 
     def run_turn(self, user_input: str) -> LoopOutcome:
         self.turns.append(user_input)
@@ -27,6 +28,18 @@ class FakeSession:
                 "## Findings\n\n- archive has interview notes\n- demo has mixed content"
             ],
             verification_nudge="Consider adding a verification step.",
+        )
+
+    def compact_session(self, focus: str | None = None) -> LoopOutcome:
+        self.compact_calls.append(focus)
+        return LoopOutcome(
+            need_tool=False,
+            raw="Compaction: manual context compaction completed.",
+            response="已完成手动上下文压缩。",
+            todos=[
+                TodoSnapshot(content="整理文件", status="in_progress"),
+            ],
+            notepad=["## Compacted\n\n- session summary refreshed"],
         )
 
     def reset(self) -> None:
@@ -98,5 +111,22 @@ def test_textual_composer_grows_with_multiple_lines():
 
             assert composer.wrapped_document.height >= 3
             assert composer.outer_size.height >= 3
+
+    asyncio.run(_run())
+
+
+def test_textual_compact_command_uses_session_compaction():
+    async def _run() -> None:
+        session = FakeSession()
+        app = MokioclawTextualApp(model="demo-model", session=session)
+        async with app.run_test(size=(140, 40)) as pilot:
+            await pilot.pause()
+            composer = app.query_one("#chat-input", ChatComposer)
+            composer.load_text("/compact 保留文件修改")
+            await pilot.press("enter")
+            await pilot.pause(0.4)
+
+            assert session.compact_calls == ["保留文件修改"]
+            assert len(app.query(".chat-card.assistant")) == 1
 
     asyncio.run(_run())

@@ -9,6 +9,7 @@ from jinja2 import Environment, FileSystemLoader, StrictUndefined
 REACT_TEMPLATE_NAME = "react_system.jinja2"
 PLANNER_TEMPLATE_NAME = "planner_system.jinja2"
 FINALIZER_TEMPLATE_NAME = "finalizer_system.jinja2"
+COMPACT_TEMPLATE_NAME = "compact_system.jinja2"
 
 
 def _prompt_dir() -> Path:
@@ -91,6 +92,26 @@ def build_finalizer_system_prompt(
         todo_markdown=_render_todo_markdown(todos),
         notepad_markdown=_render_notepad_markdown(notepad),
         verification_nudge=verification_nudge or "(none)",
+    ).strip()
+
+
+def build_compact_system_prompt(
+    *,
+    plan: list[str],
+    completed_steps: list[str],
+    todos: list[dict[str, str]],
+    notepad: list[str],
+    verification_nudge: str,
+    focus: str,
+) -> str:
+    template = PROMPT_ENV.get_template(COMPACT_TEMPLATE_NAME)
+    return template.render(
+        plan_markdown=_render_plan_markdown(plan),
+        completed_steps_markdown=_render_completed_steps_markdown(completed_steps),
+        todo_markdown=_render_todo_markdown(todos),
+        notepad_markdown=_render_notepad_markdown(notepad),
+        verification_nudge=verification_nudge or "(none)",
+        focus=focus,
     ).strip()
 
 

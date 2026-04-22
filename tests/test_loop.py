@@ -56,6 +56,10 @@ class StageModel:
             assert self.bound_tools
         elif self.stage == "finalizer":
             assert "Finalizer" in prompt
+        elif self.stage == "compactor":
+            assert "Compactor" in prompt
+        elif self.stage == "casual":
+            assert "普通聊天" in prompt
         else:
             raise AssertionError(f"Unexpected stage: {self.stage}")
 
@@ -208,6 +212,119 @@ def test_casual_chat_turn_skips_plan_execute_graph(monkeypatch):
     assert "normal conversation" in outcome.raw
     assert session.state is not None
     assert len(session.state["messages"]) == 2
+
+
+def test_manual_compact_rewrites_session_context(monkeypatch):
+    planner = StageModel(
+        stage="planner",
+        responses=[
+            json.dumps(
+                {
+                    "steps": [],
+                    "final_response": "我已经记住这段上下文了。",
+                },
+                ensure_ascii=False,
+            )
+        ],
+    )
+    executor = StageModel(stage="executor", responses=[])
+    finalizer = StageModel(stage="finalizer", responses=[])
+    compactor = StageModel(
+        stage="compactor",
+        responses=[
+            AIMessage(
+                content=(
+                    "## Active Objective\n- 继续后续会话\n\n"
+                    "## Confirmed Decisions\n- 保留关键事实\n\n"
+                    "## Files And Changes\n- 暂无\n\n"
+                    "## Current Working State\n- 已完成一次回答\n\n"
+                    "## Open Questions Or Risks\n- 无"
+                )
+            )
+        ],
+    )
+
+    monkeypatch.setattr(
+        loop,
+        "build_chat_model",
+        _build_chat_model_factory(planner, executor, finalizer, compactor),
+    )
+
+    session = loop.MokioclawSession(
+        model="demo-model",
+        context_char_limit=160,
+        compact_tail_messages=1,
+    )
+    session.run_turn("请记住：" + ("很长的上下文。" * 20))
+    outcome = session.compact_session("保留关键事实")
+
+    assert outcome.response is not None
+    assert "已完成手动上下文压缩" in outcome.response
+    assert session.state is not None
+    assert session.state["compaction_count"] == 1
+    assert "保留关键事实" == session.state["last_compaction_focus"]
+    assert session.state["compaction_summary"].startswith("## Active Objective")
+    assert isinstance(session.state["messages"][0], SystemMessage)
+    assert str(session.state["messages"][0].content).startswith(
+        loop.COMPACTION_SYSTEM_PREFIX
+    )
+
+
+def test_auto_compact_runs_before_turn_when_context_exceeds_limit(monkeypatch):
+    planner = StageModel(
+        stage="planner",
+        responses=[
+            json.dumps(
+                {
+                    "steps": [],
+                    "final_response": "第一轮完成。",
+                },
+                ensure_ascii=False,
+            ),
+            json.dumps(
+                {
+                    "steps": [],
+                    "final_response": "第二轮继续。",
+                },
+                ensure_ascii=False,
+            ),
+        ],
+    )
+    executor = StageModel(stage="executor", responses=[])
+    finalizer = StageModel(stage="finalizer", responses=[])
+    compactor = StageModel(
+        stage="compactor",
+        responses=[
+            AIMessage(
+                content=(
+                    "## Active Objective\n- 延续上一轮对话\n\n"
+                    "## Confirmed Decisions\n- 保留最近结论\n\n"
+                    "## Files And Changes\n- 暂无\n\n"
+                    "## Current Working State\n- 等待下一轮输入\n\n"
+                    "## Open Questions Or Risks\n- 无"
+                )
+            )
+        ],
+    )
+
+    monkeypatch.setattr(
+        loop,
+        "build_chat_model",
+        _build_chat_model_factory(planner, executor, finalizer, compactor),
+    )
+
+    session = loop.MokioclawSession(
+        model="demo-model",
+        context_char_limit=150,
+        compact_tail_messages=1,
+    )
+    session.run_turn("请先记住：" + ("上下文很长。" * 20))
+    outcome = session.run_turn("继续")
+
+    assert outcome.response == "第二轮继续。"
+    assert "Compaction: automatic context compaction completed." in outcome.raw
+    assert session.state is not None
+    assert session.state["compaction_count"] == 1
 
 
 def test_run_single_step_can_organize_workspace_with_todos_and_notepad(

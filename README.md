@@ -9,6 +9,8 @@
 - 交互模式默认使用 Textual TUI，提供更接近 Claude Code 风格的浅色终端界面
 - 简单问候、寒暄、感谢或“你是谁 / 你能做什么”这类输入会直接按聊天处理，不会误触发任务澄清
 - 底部输入区默认保持单行高度，输入变成长消息时会按行数小幅自适应增长
+- 支持 `/compact [focus]` 主动压缩当前会话上下文
+- 支持按配置的上下文长度上限自动压缩会话，避免长对话把上下文窗口挤满
 - 先由 Planner 生成步骤，或在信息不足时直接提问 / 直接答复
 - 澄清问题会明确指出“缺什么信息、该怎么回答”，避免泛泛地说“需要更多信息”
 - 由 Executor 聚焦当前步骤，并按需多步调用工具
@@ -41,6 +43,7 @@ mokio-claw/
 │     │  ├─ react_prompt.py
 │     │  ├─ planner_system.jinja2
 │     │  ├─ react_system.jinja2
+│     │  ├─ compact_system.jinja2
 │     │  └─ finalizer_system.jinja2
 │     ├─ providers/
 │     │  └─ ollama_provider.py
@@ -74,6 +77,9 @@ cp .env.example .env
 # OPENAI_API_KEY=ollama
 # BASE_URL=http://localhost:11434
 # MODEL=qwen3.5:cloud
+# MOKIOCLAW_CONTEXT_CHAR_LIMIT=24000
+# MOKIOCLAW_COMPACT_TAIL_MESSAGES=4
+# MOKIOCLAW_COMPACT_DEFAULT_FOCUS=优先保留当前任务目标、文件改动、todo 进度和待确认问题
 ```
 
 程序会自动读取项目根目录的 `.env`（使用 `python-dotenv`）。
@@ -140,10 +146,19 @@ uv run python main.py "把 ./demo/a.txt 移动到 ./archive/a.txt"
 交互模式内置命令：
 
 - `/help`：查看命令
+- `/compact [focus]`：主动压缩当前会话上下文，可附加本次压缩焦点
 - `/clear`：清空当前会话上下文
 - `/exit` / `/quit`：结束会话
 - `Enter`：发送消息
 - `Shift+Enter`：在输入区换行
+
+上下文压缩说明：
+
+- `MOKIOCLAW_CONTEXT_CHAR_LIMIT`：会话近似字符长度上限；当下一轮输入会让上下文超过这个值时，会先自动压缩再继续执行
+- `MOKIOCLAW_COMPACT_TAIL_MESSAGES`：压缩后仍保留的最近消息条数
+- `MOKIOCLAW_COMPACT_DEFAULT_FOCUS`：没有手动提供 focus 时的默认压缩重点
+- `/compact`：立即压缩当前会话
+- `/compact 保留测试结果和文件改动`：带焦点提示压缩，更接近 Claude Code 的 compact 用法
 
 ## 开发命令
 
@@ -176,8 +191,9 @@ START
 - `advance`：更新 `completed_steps`、`current_step_index`，并自动同步 todo 勾选状态
 - `finalizer`：根据计划、已完成步骤和工具结果生成最终答复
 
-在交互层上，当前默认使用 Textual 的 `App + CSS_PATH + Header/Footer + Input + Markdown + Workers` 组合来承载会话界面。
+在交互层上，当前默认使用 Textual 的 `App + CSS_PATH + Header/Footer + TextArea + Markdown + Workers` 组合来承载会话界面。
 界面样式采用浅色中性底色，橙色主要作为边框和分隔强调；底部 composer 默认是一行，并在多行输入时小幅增高，尽量把主要空间留给对话区。
+会话层已经支持独立的 compaction 能力：既可以通过 `/compact` 手动压缩，也会在接近配置上限时自动生成摘要并替换旧上下文。
 
 ## 当前实现
 

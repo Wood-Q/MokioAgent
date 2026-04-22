@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -25,6 +26,7 @@ from mokioclaw.core.memory import (
 from mokioclaw.core.state import MokioclawState, TodoItem
 from mokioclaw.core.types import LoopOutcome
 from mokioclaw.prompts.react_prompt import (
+    build_compact_system_prompt,
     build_executor_system_prompt,
     build_finalizer_system_prompt,
     build_planner_system_prompt,
@@ -34,6 +36,13 @@ from mokioclaw.tools.registry import tools_for_agent, tools_for_prompt
 
 DEFAULT_RECURSION_LIMIT = 40
 MAX_REPEATED_CLARIFICATION_ATTEMPTS = 2
+DEFAULT_CONTEXT_CHAR_LIMIT = 24000
+DEFAULT_COMPACT_TAIL_MESSAGES = 4
+DEFAULT_COMPACTION_FOCUS = (
+    "保留当前用户目标、已确认决定、关键文件路径、代码或文件改动、"
+    "todo 进度、notepad 发现，以及仍未解决的问题。"
+)
+COMPACTION_SYSTEM_PREFIX = "[Compacted Session Summary]"
 CASUAL_CHAT_SYSTEM_PROMPT = """
 你是 Mokioclaw。
 
@@ -124,6 +133,16 @@ class PlannerDecision:
     missing_information: list[str] = field(default_factory=list)
     suggested_user_replies: list[str] = field(default_factory=list)
     assumption_if_user_unsure: str = ""
+
+
+@dataclass(frozen=True)
+class CompactionStats:
+    before_chars: int
+    after_chars: int
+    focus: str
+    summary: str
+    count: int
+    automatic: bool = False
 
 
 def build_plan_execute_graph(model: str):
@@ -510,6 +529,99 @@ def _looks_like_casual_chat(user_input: str) -> bool:
     return False
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value >= 0 else default
+
+
+def _approx_context_chars(messages: Sequence[BaseMessage]) -> int:
+    total = 0
+    for message in messages:
+        total += len(_stringify_content(getattr(message, "content", "")))
+        if isinstance(message, AIMessage):
+            for tool_call in message.tool_calls or []:
+                total += len(json.dumps(tool_call, ensure_ascii=False))
+        total += 12
+    return total
+
+
+def _non_summary_tail_messages(
+    messages: Sequence[BaseMessage],
+    limit: int,
+) -> list[BaseMessage]:
+    if limit <= 0:
+        return []
+
+    filtered: list[BaseMessage] = []
+    for message in messages:
+        if isinstance(message, SystemMessage) and _stringify_content(
+            message.content
+        ).startswith(COMPACTION_SYSTEM_PREFIX):
+            continue
+        filtered.append(message)
+    return filtered[-limit:]
+
+
+def _render_compacted_summary_message(
+    *,
+    summary: str,
+    focus: str,
+    count: int,
+) -> str:
+    return "\n".join(
+        [
+            f"{COMPACTION_SYSTEM_PREFIX} #{count}",
+            "",
+            "Treat this as the authoritative summary of earlier conversation context.",
+            f"Focus: {focus}",
+            "",
+            summary.strip(),
+        ]
+    ).strip()
+
+
+def _truncate_compaction_summary(summary: str, limit: int) -> str:
+    clean = summary.strip()
+    if not clean:
+        return "## Active Objective\n\n- No earlier context was available to preserve."
+
+    summary_limit = max(1200, limit // 2) if limit > 0 else 1200
+    if len(clean) <= summary_limit:
+        return clean
+    return clean[: summary_limit - 1].rstrip() + "…"
+
+
+def _format_compaction_raw(stats: CompactionStats) -> str:
+    mode = "automatic" if stats.automatic else "manual"
+    return "\n".join(
+        [
+            f"Compaction: {mode} context compaction completed.",
+            f"Context chars before: {stats.before_chars}",
+            f"Context chars after: {stats.after_chars}",
+            f"Compaction count: {stats.count}",
+            f"Focus: {stats.focus}",
+        ]
+    )
+
+
+def _format_compaction_response(stats: CompactionStats) -> str:
+    mode = "自动" if stats.automatic else "手动"
+    return "\n".join(
+        [
+            f"已完成{mode}上下文压缩。",
+            f"- 近似上下文长度：{stats.before_chars} -> {stats.after_chars} 字符",
+            "- 我会基于压缩后的会话摘要继续后续对话和执行。",
+            f"- 压缩焦点：{stats.focus}",
+        ]
+    )
+
+
 def _infer_missing_information(text: str) -> list[str]:
     lowered = text.casefold()
     if "主题" in text or "分类" in text:
@@ -709,18 +821,71 @@ def _build_verification_nudge(
 @dataclass
 class MokioclawSession:
     model: str = "gpt-4o-mini"
+    context_char_limit: int | None = None
+    compact_tail_messages: int | None = None
     graph: Any = field(init=False)
     state: MokioclawState | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         self.graph = build_plan_execute_graph(self.model)
+        if self.context_char_limit is None:
+            self.context_char_limit = _env_int(
+                "MOKIOCLAW_CONTEXT_CHAR_LIMIT",
+                DEFAULT_CONTEXT_CHAR_LIMIT,
+            )
+        if self.compact_tail_messages is None:
+            self.compact_tail_messages = _env_int(
+                "MOKIOCLAW_COMPACT_TAIL_MESSAGES",
+                DEFAULT_COMPACT_TAIL_MESSAGES,
+            )
 
     def reset(self) -> None:
         self.state = None
 
+    def compact_session(self, focus: str | None = None) -> LoopOutcome:
+        if self.state is None or not self.state.get("messages"):
+            return LoopOutcome(
+                need_tool=False,
+                raw="Compaction skipped: session is empty.",
+                response="当前会话还很短，没有可压缩的上下文。",
+                tool_calls=[],
+            )
+
+        stats = self._compact_state(focus=focus, automatic=False)
+        return LoopOutcome(
+            need_tool=False,
+            raw=_format_compaction_raw(stats),
+            response=_format_compaction_response(stats),
+            tool_calls=[],
+            todos=coerce_todo_snapshots(
+                self.state.get("todos") or self.state.get("todo_snapshot")
+            ),
+            notepad=list(self.state.get("notepad", [])) or None,
+            verification_nudge=self.state.get("verification_nudge") or None,
+            memory=[
+                f"Compaction count: {stats.count}",
+                f"Context chars before: {stats.before_chars}",
+                f"Context chars after: {stats.after_chars}",
+            ],
+        )
+
     def run_turn(self, user_input: str) -> LoopOutcome:
+        auto_compaction_note = self._maybe_auto_compact(user_input)
         if _looks_like_casual_chat(user_input):
-            return self._run_casual_turn(user_input)
+            outcome = self._run_casual_turn(user_input)
+            if auto_compaction_note:
+                return LoopOutcome(
+                    need_tool=outcome.need_tool,
+                    raw="\n".join([auto_compaction_note, outcome.raw]),
+                    response=outcome.response,
+                    tool_calls=outcome.tool_calls,
+                    todos=outcome.todos,
+                    notepad=outcome.notepad,
+                    memory=outcome.memory,
+                    verification_nudge=outcome.verification_nudge,
+                    tool_error=outcome.tool_error,
+                )
+            return outcome
 
         input_state, prior_message_count = self._prepare_turn_state(user_input)
         try:
@@ -748,10 +913,13 @@ class MokioclawSession:
         self.state = result
         current_turn_messages = result["messages"][prior_message_count:]
         tool_calls = collect_tool_executions(current_turn_messages)
+        raw = render_turn_trace(result.get("turn_events", []), current_turn_messages)
+        if auto_compaction_note:
+            raw = "\n".join([auto_compaction_note, raw])
 
         return LoopOutcome(
             need_tool=bool(tool_calls),
-            raw=render_turn_trace(result.get("turn_events", []), current_turn_messages),
+            raw=raw,
             response=(
                 result.get("final_response")
                 or extract_final_response(current_turn_messages)
@@ -827,6 +995,115 @@ class MokioclawSession:
             verification_nudge=None,
         )
 
+    def _maybe_auto_compact(self, upcoming_input: str) -> str | None:
+        if self.state is None or not self.context_char_limit:
+            return None
+
+        projected_chars = (
+            _approx_context_chars(self.state.get("messages", [])) + len(upcoming_input)
+        )
+        if projected_chars <= self.context_char_limit:
+            return None
+
+        stats = self._compact_state(
+            focus=(
+                "自动压缩时优先保留当前会话的任务目标、最近的关键决策、"
+                "文件改动、todo 进度、notepad 发现，以及未完成事项。"
+            ),
+            automatic=True,
+        )
+        return _format_compaction_raw(stats)
+
+    def _compact_state(
+        self,
+        *,
+        focus: str | None,
+        automatic: bool,
+    ) -> CompactionStats:
+        assert self.state is not None
+
+        resolved_focus = (
+            focus.strip()
+            if isinstance(focus, str) and focus.strip()
+            else os.getenv("MOKIOCLAW_COMPACT_DEFAULT_FOCUS", "").strip()
+            or DEFAULT_COMPACTION_FOCUS
+        )
+        before_chars = _approx_context_chars(self.state.get("messages", []))
+        llm = build_chat_model(self.model)
+        response = _coerce_ai_message(
+            llm.invoke(
+                [
+                    SystemMessage(
+                        content=build_compact_system_prompt(
+                            plan=self.state.get("plan", []),
+                            completed_steps=self.state.get("completed_steps", []),
+                            todos=cast(
+                                list[dict[str, str]],
+                                self.state.get("todo_snapshot")
+                                or self.state.get("todos", []),
+                            ),
+                            notepad=self.state.get("notepad", []),
+                            verification_nudge=self.state.get(
+                                "verification_nudge", ""
+                            ),
+                            focus=resolved_focus,
+                        )
+                    ),
+                    *self.state["messages"],
+                ]
+            )
+        )
+        summary = _truncate_compaction_summary(
+            _stringify_content(response.content),
+            self.context_char_limit or DEFAULT_CONTEXT_CHAR_LIMIT,
+        )
+        compaction_count = self.state.get("compaction_count", 0) + 1
+        summary_message = SystemMessage(
+            content=_render_compacted_summary_message(
+                summary=summary,
+                focus=resolved_focus,
+                count=compaction_count,
+            )
+        )
+        tail_messages = _non_summary_tail_messages(
+            self.state["messages"],
+            self.compact_tail_messages or DEFAULT_COMPACT_TAIL_MESSAGES,
+        )
+        compacted_messages: list[BaseMessage] = [summary_message, *tail_messages]
+        while (
+            self.context_char_limit
+            and len(compacted_messages) > 1
+            and _approx_context_chars(compacted_messages) > self.context_char_limit
+        ):
+            compacted_messages.pop(1)
+
+        after_chars = _approx_context_chars(compacted_messages)
+        self.state = cast(
+            MokioclawState,
+            {
+                **self.state,
+                "messages": compacted_messages,
+                "compaction_summary": summary,
+                "compaction_count": compaction_count,
+                "last_compaction_focus": resolved_focus,
+                "turn_events": [
+                    (
+                        "Compaction: context summary refreshed automatically."
+                        if automatic
+                        else "Compaction: context summary refreshed manually."
+                    )
+                ],
+            },
+        )
+        return CompactionStats(
+            before_chars=before_chars,
+            after_chars=after_chars,
+            focus=resolved_focus,
+            summary=summary,
+            count=compaction_count,
+            automatic=automatic,
+        )
+
     def _prepare_turn_state(
         self,
         user_input: str,
@@ -851,12 +1128,17 @@ class MokioclawSession:
                 "current_step_index": 0,
                 "todos": [],
                 "todo_snapshot": [],
-                "notepad": [],
-                "final_response": "",
-                "verification_nudge": "",
-                "turn_events": [],
-            },
-        )
+                    "notepad": [],
+                    "compaction_summary": self.state.get("compaction_summary", ""),
+                    "compaction_count": self.state.get("compaction_count", 0),
+                    "last_compaction_focus": self.state.get(
+                        "last_compaction_focus", ""
+                    ),
+                    "final_response": "",
+                    "verification_nudge": "",
+                    "turn_events": [],
+                },
+            )
         return next_state, len(self.state["messages"])
 
 

@@ -13,6 +13,7 @@ from mokioclaw.core.memory import (
     render_todo_panel,
 )
 from mokioclaw.prompts.react_prompt import (
+    build_compact_system_prompt,
     build_planner_system_prompt,
     build_react_system_prompt,
 )
@@ -52,6 +53,23 @@ def test_build_planner_system_prompt_includes_json_contract():
     assert '"clarification_question"' in prompt
     assert '"missing_information"' in prompt
     assert '"name": "move_file"' in prompt
+
+
+def test_build_compact_system_prompt_includes_focus_and_state():
+    prompt = build_compact_system_prompt(
+        plan=["读取目录", "整理文件"],
+        completed_steps=["读取目录"],
+        todos=[{"content": "整理文件", "status": "in_progress"}],
+        notepad=["archive 已确认包含面试资料"],
+        verification_nudge="Consider adding a verification step.",
+        focus="重点保留测试结果和代码修改",
+    )
+
+    assert "Compactor" in prompt
+    assert "重点保留测试结果和代码修改" in prompt
+    assert "读取目录" in prompt
+    assert "整理文件" in prompt
+    assert "archive 已确认包含面试资料" in prompt
 
 
 def test_build_initial_state_seeds_memory():

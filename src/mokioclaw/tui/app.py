@@ -19,6 +19,7 @@ from mokioclaw.core.types import LoopOutcome, TodoSnapshot
 EXIT_COMMANDS = {"/exit", "/quit", "exit", "quit"}
 HELP_COMMANDS = {"/help", "help"}
 CLEAR_COMMANDS = {"/clear"}
+COMPACT_COMMAND = "/compact"
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,8 @@ class SessionViewState:
 
 class SessionLike(Protocol):
     def run_turn(self, user_input: str) -> LoopOutcome: ...
+
+    def compact_session(self, focus: str | None = None) -> LoopOutcome: ...
 
     def reset(self) -> None: ...
 
@@ -162,12 +165,14 @@ class MokioclawTextualApp(App[None]):
                             "## Welcome\n\n"
                             "- 普通聊天会直接回复，不会自动当成任务执行。\n"
                             "- 需要整理文件、修改内容或查看目录时，我会进入工作流。\n"
-                            "- `/clear` 重置当前会话，`/exit` 结束界面。"
+                            "- `/compact` 可主动压缩上下文，"
+                            "`/clear` 重置当前会话，`/exit` 结束界面。"
                         ),
                     )
                 with Container(id="composer-shell"):
                     yield Static(
-                        "Enter 发送 · Shift+Enter 换行 · /clear 重置 · /exit 退出",
+                        "Enter 发送 · Shift+Enter 换行 · "
+                        "/compact 压缩 · /clear 重置 · /exit 退出",
                         id="composer-help",
                     )
                     with Horizontal(id="composer-row"):
@@ -239,6 +244,7 @@ class MokioclawTextualApp(App[None]):
                     content=(
                         "## Commands\n\n"
                         "- `/help`: show this help card\n"
+                        "- `/compact [focus]`: compact the session context\n"
                         "- `/clear`: reset the conversation and side panels\n"
                         "- `/exit`: quit the app"
                     ),
@@ -247,6 +253,10 @@ class MokioclawTextualApp(App[None]):
             return
         if user_input in CLEAR_COMMANDS:
             await self.action_clear_session()
+            return
+        compact_focus = _parse_compact_command(user_input)
+        if compact_focus is not None:
+            await self._begin_compact(user_input, compact_focus or None)
             return
         await self._begin_turn(user_input)
 
@@ -297,6 +307,15 @@ class MokioclawTextualApp(App[None]):
             return
         self.call_from_thread(self.post_message, AgentTurnReady(outcome))
 
+    @work(thread=True, group="agent-turn", exclusive=True, exit_on_error=False)
+    def run_compact_turn(self, focus: str | None) -> None:
+        try:
+            outcome = self.session.compact_session(focus)
+        except Exception as exc:  # pragma: no cover - covered through message branch
+            self.call_from_thread(self.post_message, AgentTurnFailed(str(exc)))
+            return
+        self.call_from_thread(self.post_message, AgentTurnReady(outcome))
+
     def _dispatch_initial_message(self) -> None:
         assert self.initial_message is not None
         self.run_worker(self._begin_turn(self.initial_message))
@@ -316,6 +335,25 @@ class MokioclawTextualApp(App[None]):
         self._pending_card = pending_card
         await self._mount_chat_card(pending_card)
         self.run_agent_turn(user_input)
+
+    async def _begin_compact(
+        self,
+        command_text: str,
+        focus: str | None,
+    ) -> None:
+        self._set_busy(True)
+        await self._mount_chat_card(ChatCard(role="user", content=command_text))
+        pending_card = ChatCard(
+            role="thinking",
+            content=(
+                "### Compacting\n\n"
+                "Compressing the current session context so later turns can "
+                "continue with a smaller prompt window."
+            ),
+        )
+        self._pending_card = pending_card
+        await self._mount_chat_card(pending_card)
+        self.run_compact_turn(focus)
 
     async def _apply_outcome(self, state: SessionViewState) -> None:
         await self._render_todos(state.todos)
@@ -339,7 +377,8 @@ class MokioclawTextualApp(App[None]):
                     "## Welcome\n\n"
                     "- 普通聊天会直接回复，不会自动当成任务执行。\n"
                     "- 需要整理文件、修改内容或查看目录时，我会进入工作流。\n"
-                    "- `/clear` 重置当前会话，`/exit` 结束界面。"
+                    "- `/compact` 可主动压缩上下文，"
+                    "`/clear` 重置当前会话，`/exit` 结束界面。"
                 ),
             )
         )
@@ -395,7 +434,8 @@ class MokioclawTextualApp(App[None]):
             self.sub_title = f"Textual Session · {self.model} · Running"
         else:
             help_widget.update(
-                "Enter 发送 · Shift+Enter 换行 · /clear 重置 · /exit 退出"
+                "Enter 发送 · Shift+Enter 换行 · "
+                "/compact 压缩 · /clear 重置 · /exit 退出"
             )
             self.sub_title = f"Textual Session · {self.model}"
             input_widget.focus()
@@ -429,3 +469,12 @@ def _todo_icon(status: str) -> str:
     if status == "in_progress":
         return "[-]"
     return "[ ]"
+
+
+def _parse_compact_command(user_input: str) -> str | None:
+    if user_input == COMPACT_COMMAND:
+        return ""
+    if not user_input.startswith(f"{COMPACT_COMMAND} "):
+        return None
+    focus = user_input[len(COMPACT_COMMAND) :].strip()
+    return focus or ""

@@ -21,6 +21,7 @@ app = typer.Typer(
 EXIT_COMMANDS = {"/exit", "/quit", "exit", "quit"}
 HELP_COMMANDS = {"/help", "help"}
 CLEAR_COMMANDS = {"/clear"}
+COMPACT_COMMAND = "/compact"
 
 
 class UIChoice(StrEnum):
@@ -112,7 +113,16 @@ def _render_chat_turn(outcome: LoopOutcome) -> None:
 
 
 def _render_chat_help() -> None:
-    typer.echo("Commands: /help, /clear, /exit")
+    typer.echo("Commands: /help, /clear, /compact [focus], /exit")
+
+
+def _parse_compact_command(user_input: str) -> str | None:
+    if user_input == COMPACT_COMMAND:
+        return ""
+    if not user_input.startswith(f"{COMPACT_COMMAND} "):
+        return None
+    focus = user_input[len(COMPACT_COMMAND) :].strip()
+    return focus or ""
 
 
 def _read_user_input() -> str | None:
@@ -145,6 +155,15 @@ def _run_chat_session(message: str | None, model: str) -> int:
         if user_input in CLEAR_COMMANDS:
             session.reset()
             typer.echo("\nSession cleared.")
+            continue
+        compact_focus = _parse_compact_command(user_input)
+        if compact_focus is not None:
+            try:
+                outcome = session.compact_session(compact_focus or None)
+            except Exception as exc:
+                _render_runtime_error(exc)
+                continue
+            _render_chat_turn(outcome)
             continue
         if user_input in EXIT_COMMANDS:
             typer.echo("\nSession ended.")

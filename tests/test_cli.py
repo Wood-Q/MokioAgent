@@ -164,3 +164,37 @@ def test_cli_runs_interactive_chat_until_exit(monkeypatch):
     assert "Assistant> 你想按主题分类，还是统一格式？" in result.output
     assert "Assistant> 好的，我会按主题分类整理。" in result.output
     assert "Session ended." in result.output
+
+
+def test_cli_plain_chat_supports_compact_command(monkeypatch):
+    class FakeSession(MokioclawSession):
+        def __init__(self, model: str):
+            self.model = model
+            self.compact_focuses: list[str | None] = []
+
+        def reset(self) -> None:
+            return None
+
+        def run_turn(self, user_input: str) -> LoopOutcome:
+            raise AssertionError("run_turn should not be used for /compact")
+
+        def compact_session(self, focus: str | None = None) -> LoopOutcome:
+            self.compact_focuses.append(focus)
+            return LoopOutcome(
+                need_tool=False,
+                raw="Compaction: manual context compaction completed.",
+                response="已完成手动上下文压缩。",
+            )
+
+    monkeypatch.setattr(cli_app, "MokioclawSession", FakeSession)
+    monkeypatch.setattr(cli_app, "_stdin_is_interactive", lambda: True)
+
+    result = runner.invoke(
+        cli_app.app,
+        ["--ui", "plain"],
+        input="/compact 保留文件修改\n/exit\n",
+    )
+
+    assert result.exit_code == 0
+    assert "Assistant> 已完成手动上下文压缩。" in result.output
+    assert "Session ended." in result.output
