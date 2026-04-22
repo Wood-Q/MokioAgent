@@ -23,6 +23,7 @@ from mokioclaw.core.memory import (
     render_todo_panel,
     render_turn_trace,
 )
+from mokioclaw.core.project_rules import load_project_rule_messages
 from mokioclaw.core.state import MokioclawState, TodoItem
 from mokioclaw.core.types import LoopOutcome
 from mokioclaw.prompts.react_prompt import (
@@ -196,7 +197,9 @@ def _build_planner_node(
     )
 
     def plan(state: MokioclawState) -> dict[str, object]:
-        response = llm.invoke([system_message, *state["messages"]])
+        response = llm.invoke(
+            [system_message, *_project_rule_messages(), *state["messages"]]
+        )
         decision = _parse_planner_response(_coerce_ai_message(response))
         if decision.steps:
             events = [
@@ -272,7 +275,9 @@ def _build_executor_node(
                 notepad=state.get("notepad", []),
             )
         )
-        response = llm.invoke([system_message, *state["messages"]])
+        response = llm.invoke(
+            [system_message, *_project_rule_messages(), *state["messages"]]
+        )
         return {"messages": [_coerce_ai_message(response)]}
 
     return execute
@@ -342,7 +347,9 @@ def _build_finalizer_node(
                 verification_nudge=state.get("verification_nudge", ""),
             )
         )
-        response = _coerce_ai_message(llm.invoke([system_message, *state["messages"]]))
+        response = _coerce_ai_message(
+            llm.invoke([system_message, *_project_rule_messages(), *state["messages"]])
+        )
         return {
             "messages": [response],
             "final_response": _stringify_content(response.content),
@@ -538,6 +545,10 @@ def _env_int(name: str, default: int) -> int:
     except ValueError:
         return default
     return value if value >= 0 else default
+
+
+def _project_rule_messages() -> list[HumanMessage]:
+    return load_project_rule_messages()
 
 
 def _approx_context_chars(messages: Sequence[BaseMessage]) -> int:
@@ -941,6 +952,7 @@ class MokioclawSession:
             llm.invoke(
                 [
                     SystemMessage(content=CASUAL_CHAT_SYSTEM_PROMPT),
+                    *_project_rule_messages(),
                     *prior_messages,
                     human_message,
                 ]
@@ -1049,6 +1061,7 @@ class MokioclawSession:
                             focus=resolved_focus,
                         )
                     ),
+                    *_project_rule_messages(),
                     *self.state["messages"],
                 ]
             )

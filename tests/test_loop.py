@@ -8,6 +8,7 @@ from langgraph.errors import GraphRecursionError
 
 import mokioclaw.core.loop as loop
 import mokioclaw.tools.workspace_tools as workspace_tools
+from mokioclaw.core.project_rules import MOKIOCLAW_RULE_MESSAGE_PREFIX
 
 ModelResponse = AIMessage | str | Callable[[list[object], int], AIMessage]
 
@@ -212,6 +213,51 @@ def test_casual_chat_turn_skips_plan_execute_graph(monkeypatch):
     assert "normal conversation" in outcome.raw
     assert session.state is not None
     assert len(session.state["messages"]) == 2
+
+
+def test_project_rules_are_injected_into_model_context(tmp_path, monkeypatch):
+    (tmp_path / "mokioclaw.md").write_text(
+        "Always mention that tests should be updated when code changes.",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    def _planner_with_rules(messages: list[object], _: int) -> AIMessage:
+        rule_messages = [
+            message
+            for message in messages
+            if getattr(message, "type", None) == "human"
+            and str(getattr(message, "content", "")).startswith(
+                MOKIOCLAW_RULE_MESSAGE_PREFIX
+            )
+        ]
+        assert len(rule_messages) == 1
+        assert "tests should be updated" in str(
+            getattr(rule_messages[0], "content", "")
+        )
+        return AIMessage(
+            content=json.dumps(
+                {
+                    "steps": [],
+                    "final_response": "我会遵守项目规则。",
+                },
+                ensure_ascii=False,
+            )
+        )
+
+    planner = StageModel(stage="planner", responses=[_planner_with_rules])
+    executor = StageModel(stage="executor", responses=[])
+    finalizer = StageModel(stage="finalizer", responses=[])
+
+    monkeypatch.setattr(
+        loop,
+        "build_chat_model",
+        _build_chat_model_factory(planner, executor, finalizer),
+    )
+
+    outcome = loop.run_single_step("请回答你是否会遵守项目规则。", model="demo-model")
+
+    assert outcome.response == "我会遵守项目规则。"
 
 
 def test_manual_compact_rewrites_session_context(monkeypatch):

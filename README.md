@@ -11,6 +11,7 @@
 - 底部输入区默认保持单行高度，输入变成长消息时会按行数小幅自适应增长
 - 支持 `/compact [focus]` 主动压缩当前会话上下文
 - 支持按配置的上下文长度上限自动压缩会话，避免长对话把上下文窗口挤满
+- 支持 `mokioclaw.md` 项目规则文件，作为类似 Claude Code `CLAUDE.md` 的持久项目说明
 - 先由 Planner 生成步骤，或在信息不足时直接提问 / 直接答复
 - 澄清问题会明确指出“缺什么信息、该怎么回答”，避免泛泛地说“需要更多信息”
 - 由 Executor 聚焦当前步骤，并按需多步调用工具
@@ -37,6 +38,7 @@ mokio-claw/
 │     │  ├─ loop.py
 │     │  ├─ context.py
 │     │  ├─ memory.py
+│     │  ├─ project_rules.py
 │     │  ├─ state.py
 │     │  └─ types.py
 │     ├─ prompts/
@@ -59,6 +61,7 @@ mokio-claw/
 └─ tests/
    ├─ test_cli.py
    ├─ test_loop.py
+   ├─ test_project_rules.py
    ├─ test_react_content.py
    ├─ test_provider_env.py
    ├─ test_session_tools.py
@@ -195,6 +198,43 @@ START
 界面样式采用浅色中性底色，橙色主要作为边框和分隔强调；底部 composer 默认是一行，并在多行输入时小幅增高，尽量把主要空间留给对话区。
 会话层已经支持独立的 compaction 能力：既可以通过 `/compact` 手动压缩，也会在接近配置上限时自动生成摘要并替换旧上下文。
 
+## `mokioclaw.md` 项目规则
+
+`mokioclaw` 会在当前工作目录向上递归查找这些规则文件，并按“越上层越先、越具体越后”的顺序自动加载：
+
+- `./mokioclaw.md`
+- `./MOKIOCLAW.md`
+- `./.mokioclaw/mokioclaw.md`
+- `./.mokioclaw/MOKIOCLAW.md`
+
+这些规则会在每轮模型调用前自动注入上下文，适合放：
+
+- build / test / lint 命令
+- 项目的代码风格和命名约定
+- 架构边界和模块约束
+- 团队通用工作流
+
+推荐保持简洁、具体、结构化，尽量控制在 200 行以内。
+
+目前支持类似 Claude Code `CLAUDE.md` 的 `@path` 导入能力：
+
+- 支持相对路径、绝对路径和 `~` 家目录路径
+- 不会在 markdown 行内代码或代码块里触发导入
+- 会移除块级 HTML 注释，避免无效内容占用上下文
+- 导入最大深度为 5 层
+
+示例：
+
+```md
+# Project Rules
+
+- Always run `uv run --group dev pytest` after non-trivial Python changes.
+- Prefer `rg` for searching code.
+- Update tests when changing logic under `src/mokioclaw/core/`.
+
+See @README.md for project overview.
+```
+
 ## 当前实现
 
 - CLI 层使用 `Typer`
@@ -202,6 +242,7 @@ START
 - Prompt 渲染使用 `Jinja2`，并拆分为 Planner / Executor / Finalizer 三类 prompt
 - Agent Loop 使用 LangGraph `StateGraph`
 - Tool 执行使用 LangGraph `ToolNode`
+- `mokioclaw.md` 规则会在每轮调用前自动解析并作为项目指令注入上下文
 - Graph state 中维护 `plan`、`completed_steps`、`current_step_index`、`todos`、`todo_snapshot`、`notepad`、`clarification_attempts`、`last_clarification_signature`、`final_response`、`verification_nudge`、`turn_events`
 - 对编辑类工具保存文件读取快照，并在写回前检查过期状态
 - 对重复澄清和 graph recursion 提供 loop guard，避免任务卡在无进展状态
