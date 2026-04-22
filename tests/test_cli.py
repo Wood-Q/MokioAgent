@@ -4,7 +4,7 @@ from typer.testing import CliRunner
 
 import mokioclaw.cli.app as cli_app
 from mokioclaw.core.loop import MokioclawSession
-from mokioclaw.core.types import LoopOutcome, ToolExecution
+from mokioclaw.core.types import LoopOutcome, TodoSnapshot, ToolExecution
 
 runner = CliRunner()
 
@@ -56,6 +56,33 @@ def test_cli_prints_tool_steps(monkeypatch):
     assert "Moved file from 'a' to 'b'." in result.output
 
 
+def test_cli_prints_todo_notepad_and_verification_sections(monkeypatch):
+    monkeypatch.setattr(
+        cli_app,
+        "run_single_step",
+        lambda message, model: LoopOutcome(
+            need_tool=True,
+            raw="Planner: generated execution plan",
+            response="整理完成。",
+            todos=[
+                TodoSnapshot(content="读取目录", status="completed"),
+                TodoSnapshot(content="生成总结", status="completed"),
+            ],
+            notepad=["目录中包含 2 个文本文件"],
+            verification_nudge="Consider adding a verification step.",
+        ),
+    )
+
+    result = runner.invoke(cli_app.app, ["整理目录"])
+
+    assert result.exit_code == 0
+    assert "=== Todo Panel ===" in result.output
+    assert "[x] 读取目录" in result.output
+    assert "=== NotePad ===" in result.output
+    assert "目录中包含 2 个文本文件" in result.output
+    assert "=== Verification Nudge ===" in result.output
+
+
 def test_cli_prints_runtime_error(monkeypatch):
     def _raise_error(message, model):
         raise RuntimeError("404 page not found")
@@ -86,11 +113,27 @@ def test_cli_runs_interactive_chat_until_exit(monkeypatch):
                     need_tool=False,
                     raw="Human: 帮我整理\nAI: 你想按什么方式整理？",
                     response="你想按主题分类，还是统一格式？",
+                    todos=[
+                        TodoSnapshot(
+                            content="确认整理方式",
+                            status="in_progress",
+                        )
+                    ],
                 )
             return LoopOutcome(
                 need_tool=False,
                 raw="Human: 按主题分类\nAI: 好的",
                 response="好的，我会按主题分类整理。",
+                todos=[
+                    TodoSnapshot(
+                        content="确认整理方式",
+                        status="completed",
+                    ),
+                    TodoSnapshot(
+                        content="按主题完成整理",
+                        status="in_progress",
+                    ),
+                ],
             )
 
     monkeypatch.setattr(cli_app, "MokioclawSession", FakeSession)
@@ -104,6 +147,7 @@ def test_cli_runs_interactive_chat_until_exit(monkeypatch):
 
     assert result.exit_code == 0
     assert "Mokioclaw chat mode" in result.output
+    assert "Todo>" in result.output
     assert "Assistant> 你想按主题分类，还是统一格式？" in result.output
     assert "Assistant> 好的，我会按主题分类整理。" in result.output
     assert "Session ended." in result.output

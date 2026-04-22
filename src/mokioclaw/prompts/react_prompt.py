@@ -42,6 +42,8 @@ def build_react_system_prompt(tools: list[dict[str, Any]]) -> str:
         plan_markdown="(planner not provided)",
         completed_steps_markdown="(none)",
         current_step="当前任务",
+        todo_markdown="(empty)",
+        notepad_markdown="(empty)",
     ).strip()
 
 
@@ -58,6 +60,8 @@ def build_executor_system_prompt(
     plan: list[str],
     completed_steps: list[str],
     current_step: str,
+    todos: list[dict[str, str]],
+    notepad: list[str],
 ) -> str:
     template = PROMPT_ENV.get_template(REACT_TEMPLATE_NAME)
     return template.render(
@@ -65,6 +69,8 @@ def build_executor_system_prompt(
         plan_markdown=_render_plan_markdown(plan),
         completed_steps_markdown=_render_completed_steps_markdown(completed_steps),
         current_step=current_step,
+        todo_markdown=_render_todo_markdown(todos),
+        notepad_markdown=_render_notepad_markdown(notepad),
     ).strip()
 
 
@@ -73,12 +79,18 @@ def build_finalizer_system_prompt(
     user_input: str,
     plan: list[str],
     completed_steps: list[str],
+    todos: list[dict[str, str]],
+    notepad: list[str],
+    verification_nudge: str,
 ) -> str:
     template = PROMPT_ENV.get_template(FINALIZER_TEMPLATE_NAME)
     return template.render(
         user_input=user_input,
         plan_markdown=_render_plan_markdown(plan),
         completed_steps_markdown=_render_completed_steps_markdown(completed_steps),
+        todo_markdown=_render_todo_markdown(todos),
+        notepad_markdown=_render_notepad_markdown(notepad),
+        verification_nudge=verification_nudge or "(none)",
     ).strip()
 
 
@@ -94,3 +106,25 @@ def _render_completed_steps_markdown(completed_steps: list[str]) -> str:
     return "\n".join(
         f"{index}. {step}" for index, step in enumerate(completed_steps, start=1)
     )
+
+
+def _render_todo_markdown(todos: list[dict[str, str]]) -> str:
+    if not todos:
+        return "(empty)"
+    return "\n".join(
+        f"{_todo_marker(todo['status'])} {todo['content']}" for todo in todos
+    )
+
+
+def _render_notepad_markdown(notepad: list[str]) -> str:
+    if not notepad:
+        return "(empty)"
+    return "\n".join(f"- {entry}" for entry in notepad)
+
+
+def _todo_marker(status: str) -> str:
+    if status == "completed":
+        return "[x]"
+    if status == "in_progress":
+        return "[-]"
+    return "[ ]"

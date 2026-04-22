@@ -9,12 +9,26 @@
 - JSON 结构必须是：
   {
     "steps": ["步骤1", "步骤2"],
-    "final_response": ""
+    "final_response": "",
+    "needs_clarification": false,
+    "clarification_question": "",
+    "missing_information": [],
+    "suggested_user_replies": [],
+    "assumption_if_user_unsure": ""
   }
 - `steps` 中每一步都要具体、可执行、按顺序排列。
+- `steps` 应足够短，便于后续直接变成 todo 清单。
 - 如果 `steps` 非空，`final_response` 应为空字符串。
-- 如果 `steps` 为空，`final_response` 必须给出直接答复或澄清问题。
+- 如果 `steps` 为空且需要澄清，必须设置 `needs_clarification=true`，并填写：
+  - `clarification_question`：只能问 1 个最关键、最容易回答的问题
+  - `missing_information`：列出 1 到 3 个具体缺失信息，不能写泛泛的“更多信息”
+  - `suggested_user_replies`：尽量给 2 到 4 个用户可以直接粘贴回复的短选项
+  - `assumption_if_user_unsure`：如果存在低风险默认假设，写出来
+- 如果 `steps` 为空但不需要澄清，`final_response` 必须给出直接答复。
 - 优先规划使用现有工具可完成的步骤。
+- 如果缺少的信息不是关键阻塞，优先采用低风险默认假设继续规划，而不是先卡住用户。
+- 不要输出“我需要更多信息”“请补充更多上下文”这类模糊表述；必须具体说明到底缺什么。
+- 如果最近消息里用户已经回答过上一个澄清问题，不要原样重复同一句问题；要么继续规划，要么明确说明仍然缺的具体点。
 
 可用工具：
 {{ tools_json }}

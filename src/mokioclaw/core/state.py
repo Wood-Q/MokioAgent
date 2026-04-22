@@ -13,6 +13,11 @@ class FileSnapshot(TypedDict):
     source: str
 
 
+class TodoItem(TypedDict):
+    content: str
+    status: str
+
+
 def merge_text_lists(
     left: list[str] | None,
     right: list[str] | None,
@@ -29,6 +34,24 @@ def merge_file_snapshots(
     return merged
 
 
+def replace_todo_lists(
+    left: list[TodoItem] | None,
+    right: list[TodoItem] | None,
+) -> list[TodoItem]:
+    if right is None:
+        return [*(left or [])]
+    return [*right]
+
+
+def replace_text_lists(
+    left: list[str] | None,
+    right: list[str] | None,
+) -> list[str]:
+    if right is None:
+        return [*(left or [])]
+    return [*right]
+
+
 class MokioclawState(TypedDict, total=False):
     """State used during a single Plan & Execute agent run."""
 
@@ -41,5 +64,11 @@ class MokioclawState(TypedDict, total=False):
     plan: NotRequired[list[str]]
     completed_steps: NotRequired[list[str]]
     current_step_index: NotRequired[int]
+    todos: NotRequired[Annotated[list[TodoItem], replace_todo_lists]]
+    todo_snapshot: NotRequired[Annotated[list[TodoItem], replace_todo_lists]]
+    notepad: NotRequired[Annotated[list[str], replace_text_lists]]
+    clarification_attempts: NotRequired[int]
+    last_clarification_signature: NotRequired[str]
     final_response: NotRequired[str]
+    verification_nudge: NotRequired[str]
     turn_events: NotRequired[Annotated[list[str], merge_text_lists]]

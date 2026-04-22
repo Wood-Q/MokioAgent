@@ -5,9 +5,12 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from mokioclaw.core.memory import (
     build_initial_state,
     build_short_term_memory,
+    coerce_todo_snapshots,
     collect_tool_executions,
     extract_final_response,
     render_message_trace,
+    render_notepad,
+    render_todo_panel,
 )
 from mokioclaw.prompts.react_prompt import (
     build_planner_system_prompt,
@@ -27,6 +30,8 @@ def test_build_executor_system_prompt_includes_tools_json():
     )
     assert "Executor" in prompt
     assert "Plan & Execute" in prompt
+    assert "Todo" in prompt
+    assert "NotePad" in prompt
     assert '"name": "move_file"' in prompt
 
 
@@ -43,6 +48,9 @@ def test_build_planner_system_prompt_includes_json_contract():
     assert "Planner" in prompt
     assert '"steps"' in prompt
     assert '"final_response"' in prompt
+    assert '"needs_clarification"' in prompt
+    assert '"clarification_question"' in prompt
+    assert '"missing_information"' in prompt
     assert '"name": "move_file"' in prompt
 
 
@@ -51,6 +59,11 @@ def test_build_initial_state_seeds_memory():
 
     assert state["user_input"] == "帮我移动文件"
     assert state["short_term_memory"] == ["User request: 帮我移动文件"]
+    assert state["todos"] == []
+    assert state["todo_snapshot"] == []
+    assert state["notepad"] == []
+    assert state["clarification_attempts"] == 0
+    assert state["last_clarification_signature"] == ""
     assert len(state["messages"]) == 1
 
 
@@ -89,3 +102,17 @@ def test_memory_helpers_extract_trace_and_tool_steps():
     assert any("Tool used: move_file" in item for item in memory)
     assert "Tool Call: move_file" in trace
     assert "Tool Result [move_file]" in trace
+
+
+def test_todo_and_notepad_render_helpers():
+    todos = coerce_todo_snapshots(
+        [
+            {"content": "读取目录", "status": "completed"},
+            {"content": "整理文件", "status": "in_progress"},
+        ]
+    )
+    notes = ["记录第一条发现", "记录第二条发现"]
+
+    assert "[x] 读取目录" in render_todo_panel(todos)
+    assert "[-] 整理文件" in render_todo_panel(todos)
+    assert "- 记录第一条发现" in render_notepad(notes)

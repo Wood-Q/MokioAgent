@@ -7,9 +7,14 @@
 - 接收用户自然语言
 - 支持 CLI 持续多轮对话，直到输入 `/exit` 或 `/quit`
 - 先由 Planner 生成步骤，或在信息不足时直接提问 / 直接答复
+- 澄清问题会明确指出“缺什么信息、该怎么回答”，避免泛泛地说“需要更多信息”
 - 由 Executor 聚焦当前步骤，并按需多步调用工具
+- 每轮任务都会先建立 Todo 面板，并在步骤推进时自动勾选
+- 支持 NotePad，用于外部化中间发现和后续步骤复用的信息
 - 由 Finalizer 汇总执行结果，生成对用户的最终答复
-- 保留 graph state、短期 memory、文件读取快照，便于继续向 Notepad / Todo / Reflection 演化
+- 对复杂任务支持 verification nudge，提醒补充验证步骤
+- 内置 loop guard：重复澄清会触发去重提示，graph 递归过深会自动中止本轮执行
+- 保留 graph state、短期 memory、文件读取快照，便于继续向 Reflection 演化
 
 ## 项目结构
 
@@ -39,12 +44,14 @@ mokio-claw/
 │     ├─ tools/
 │     │  ├─ registry.py
 │     │  ├─ file_tools.py
+│     │  ├─ session_tools.py
 │     │  └─ workspace_tools.py
 └─ tests/
    ├─ test_cli.py
    ├─ test_loop.py
    ├─ test_react_content.py
    ├─ test_provider_env.py
+   ├─ test_session_tools.py
    ├─ test_tools.py
    └─ test_workspace_tools.py
 ```
@@ -82,6 +89,8 @@ uv run mokioclaw "把 ./demo/a.txt 移动到 ./archive/a.txt"
 ```
 
 在终端里默认会进入持续对话模式。Agent 如果需要继续确认信息，会直接追问；你可以继续输入回复，直到输入 `/exit` 或 `/quit` 结束。
+
+当任务进入执行阶段时，CLI 会额外展示 Todo 面板、NotePad，以及必要时的 verification nudge。
 
 也可以不带初始消息，直接进入交互会话：
 
@@ -138,9 +147,10 @@ START
 各阶段职责：
 
 - `planner`：把用户请求转成 1 到 5 个可执行步骤；如果不需要执行或信息不足，则直接返回答复 / 澄清问题
-- `executor`：只聚焦当前步骤，必要时调用工具，并在该步骤完成后给出简短步骤结果
+- `planner`：澄清时会返回结构化缺失信息、具体问题、建议回复和默认假设，避免模糊追问
+- `executor`：只聚焦当前步骤；如果 Todo 面板为空，会先通过 `todo_write` 建立清单，再执行当前步骤
 - `tools`：通过 LangGraph `ToolNode` 执行工具调用
-- `advance`：更新 `completed_steps` 和 `current_step_index`
+- `advance`：更新 `completed_steps`、`current_step_index`，并自动同步 todo 勾选状态
 - `finalizer`：根据计划、已完成步骤和工具结果生成最终答复
 
 ## 当前实现
@@ -149,12 +159,15 @@ START
 - Prompt 渲染使用 `Jinja2`，并拆分为 Planner / Executor / Finalizer 三类 prompt
 - Agent Loop 使用 LangGraph `StateGraph`
 - Tool 执行使用 LangGraph `ToolNode`
-- Graph state 中维护 `plan`、`completed_steps`、`current_step_index`、`final_response`、`turn_events`
+- Graph state 中维护 `plan`、`completed_steps`、`current_step_index`、`todos`、`todo_snapshot`、`notepad`、`clarification_attempts`、`last_clarification_signature`、`final_response`、`verification_nudge`、`turn_events`
 - 对编辑类工具保存文件读取快照，并在写回前检查过期状态
+- 对重复澄清和 graph recursion 提供 loop guard，避免任务卡在无进展状态
 - 环境变量加载使用 `python-dotenv`
 
 ## 当前内置工具
 
+- `todo_write(todos)`：创建或整体替换当前任务的 Todo 面板
+- `notepad_write(note, replace=False)`：追加或替换当前任务的 NotePad
 - `move_file(src, dst)`：将文件从源路径移动到目标路径
 - `file_tree(path, max_depth=3, show_hidden=False)`：获取文件或目录的树状结构
 - `file_edit(path, old_string, new_string, replace_all=False)`：仅允许在“当前 run 已读过且未过期”的文本文件上安全生成 patch 并写回

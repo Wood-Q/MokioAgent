@@ -5,6 +5,12 @@ from typing import Any
 
 
 @dataclass
+class TodoSnapshot:
+    content: str
+    status: str
+
+
+@dataclass
 class ToolExecution:
     name: str
     arguments: dict[str, Any] | None = None
@@ -17,5 +23,8 @@ class LoopOutcome:
     raw: str
     response: str | None = None
     tool_calls: list[ToolExecution] | None = None
+    todos: list[TodoSnapshot] | None = None
+    notepad: list[str] | None = None
     memory: list[str] | None = None
+    verification_nudge: str | None = None
     tool_error: str | None = None

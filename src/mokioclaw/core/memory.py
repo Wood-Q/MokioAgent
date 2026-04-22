@@ -6,8 +6,8 @@ from typing import Any, cast
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
-from mokioclaw.core.state import MokioclawState
-from mokioclaw.core.types import ToolExecution
+from mokioclaw.core.state import MokioclawState, TodoItem
+from mokioclaw.core.types import TodoSnapshot, ToolExecution
 
 
 def build_initial_state(user_input: str) -> MokioclawState:
@@ -19,7 +19,13 @@ def build_initial_state(user_input: str) -> MokioclawState:
         plan=[],
         completed_steps=[],
         current_step_index=0,
+        todos=[],
+        todo_snapshot=[],
+        notepad=[],
+        clarification_attempts=0,
+        last_clarification_signature="",
         final_response="",
+        verification_nudge="",
         turn_events=[],
     )
 
@@ -113,6 +119,34 @@ def render_turn_trace(events: Sequence[str], messages: Sequence[BaseMessage]) ->
     return "\n".join(lines)
 
 
+def render_todo_panel(todos: Sequence[TodoItem | TodoSnapshot]) -> str:
+    if not todos:
+        return "(empty)"
+    return "\n".join(
+        f"{_todo_marker(_todo_status(todo))} {_todo_content(todo)}" for todo in todos
+    )
+
+
+def render_notepad(notes: Sequence[str]) -> str:
+    if not notes:
+        return "(empty)"
+    return "\n".join(f"- {note}" for note in notes)
+
+
+def coerce_todo_snapshots(
+    todos: Sequence[TodoItem | TodoSnapshot] | None,
+) -> list[TodoSnapshot]:
+    snapshots: list[TodoSnapshot] = []
+    for todo in todos or []:
+        snapshots.append(
+            TodoSnapshot(
+                content=_todo_content(todo),
+                status=_todo_status(todo),
+            )
+        )
+    return snapshots
+
+
 def _stringify_content(content: Any) -> str:
     if isinstance(content, str):
         return content
@@ -130,3 +164,23 @@ def _stringify_content(content: Any) -> str:
             parts.append(str(item))
         return "\n".join(parts)
     return str(cast(object, content))
+
+
+def _todo_marker(status: str) -> str:
+    if status == "completed":
+        return "[x]"
+    if status == "in_progress":
+        return "[-]"
+    return "[ ]"
+
+
+def _todo_content(todo: TodoItem | TodoSnapshot) -> str:
+    if isinstance(todo, TodoSnapshot):
+        return todo.content
+    return todo["content"]
+
+
+def _todo_status(todo: TodoItem | TodoSnapshot) -> str:
+    if isinstance(todo, TodoSnapshot):
+        return todo.status
+    return todo["status"]

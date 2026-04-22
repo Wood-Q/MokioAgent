@@ -3,6 +3,7 @@ from __future__ import annotations
 from langchain_core.tools import BaseTool, StructuredTool
 
 from mokioclaw.tools.file_tools import file_tree, move_file
+from mokioclaw.tools.session_tools import notepad_write, todo_write
 from mokioclaw.tools.workspace_tools import bash, file_edit, file_write
 
 
@@ -15,6 +16,8 @@ def _structured_tool(func, *, name: str, description: str) -> StructuredTool:
 
 
 TOOLS: tuple[BaseTool, ...] = (
+    todo_write,
+    notepad_write,
     _structured_tool(
         move_file,
         name="move_file",
@@ -32,6 +35,63 @@ TOOLS: tuple[BaseTool, ...] = (
 
 
 PROMPT_TOOLS: tuple[dict[str, object], ...] = (
+    {
+        "name": "todo_write",
+        "description": (
+            "Create or replace the current task todo panel. Use it at the start "
+            "of a planned task and whenever the checklist needs to be resynced."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "todos": {
+                    "type": "array",
+                    "description": "Full replacement list for the current todo panel.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "content": {
+                                "type": "string",
+                                "description": "Short standalone todo text.",
+                            },
+                            "status": {
+                                "type": "string",
+                                "enum": ["pending", "in_progress", "completed"],
+                                "description": "Todo item status.",
+                            },
+                        },
+                        "required": ["content", "status"],
+                        "additionalProperties": False,
+                    },
+                }
+            },
+            "required": ["todos"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "notepad_write",
+        "description": (
+            "Append a durable intermediate finding to the task notepad, or "
+            "replace the notepad in full."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "note": {
+                    "type": "string",
+                    "description": "Important intermediate finding or conclusion.",
+                },
+                "replace": {
+                    "type": "boolean",
+                    "description": "Set true to replace the whole notepad.",
+                    "default": False,
+                },
+            },
+            "required": ["note"],
+            "additionalProperties": False,
+        },
+    },
     {
         "name": "move_file",
         "description": "Move a file from src path to dst path.",

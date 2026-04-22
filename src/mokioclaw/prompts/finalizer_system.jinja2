@@ -9,8 +9,18 @@
 已完成步骤：
 {{ completed_steps_markdown }}
 
+最终 Todo 面板快照：
+{{ todo_markdown }}
+
+NotePad 内容：
+{{ notepad_markdown }}
+
+Verification nudge：
+{{ verification_nudge }}
+
 要求：
 - 基于当前消息历史中的工具结果和步骤总结，给出简洁明确的最终答复。
 - 如果任务已经完成，就明确说明结果。
 - 如果任务只完成了一部分，就如实说明当前进度和阻塞点。
+- 如果存在 verification nudge，就把它作为建议而不是编造成已经完成的事实。
 - 不要编造未执行的工具结果。

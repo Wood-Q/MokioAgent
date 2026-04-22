@@ -6,12 +6,13 @@ from typing import Annotated
 import typer
 
 from mokioclaw.core.loop import MokioclawSession, run_single_step
+from mokioclaw.core.memory import render_notepad, render_todo_panel
 from mokioclaw.core.types import LoopOutcome
 from mokioclaw.providers.ollama_provider import default_model
 
 app = typer.Typer(
     context_settings={"help_option_names": ["-h", "--help"]},
-    help="Minimal ReAct agent demo for Agent fundamentals.",
+    help="Plan & Execute agent demo for Agent fundamentals.",
     no_args_is_help=False,
 )
 
@@ -40,6 +41,18 @@ def _render_verbose_outcome(outcome: LoopOutcome) -> int:
         typer.echo("\n=== Memory Snapshot ===")
         for item in outcome.memory:
             typer.echo(f"- {item}")
+
+    if outcome.todos:
+        typer.echo("\n=== Todo Panel ===")
+        typer.echo(render_todo_panel(outcome.todos))
+
+    if outcome.notepad:
+        typer.echo("\n=== NotePad ===")
+        typer.echo(render_notepad(outcome.notepad))
+
+    if outcome.verification_nudge:
+        typer.echo("\n=== Verification Nudge ===")
+        typer.echo(outcome.verification_nudge)
 
     typer.echo("\n=== Final Response ===")
     typer.echo(outcome.response)
@@ -70,6 +83,15 @@ def _stdin_is_interactive() -> bool:
 
 
 def _render_chat_turn(outcome: LoopOutcome) -> None:
+    if outcome.todos:
+        typer.echo("\nTodo>")
+        typer.echo(render_todo_panel(outcome.todos))
+    if outcome.notepad:
+        typer.echo("\nNotePad>")
+        typer.echo(render_notepad(outcome.notepad))
+    if outcome.verification_nudge:
+        typer.echo("\nVerifier>")
+        typer.echo(outcome.verification_nudge)
     response = outcome.response or "(no response)"
     typer.echo(f"\nAssistant> {response}")
 
