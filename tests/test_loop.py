@@ -154,10 +154,10 @@ def test_run_single_step_uses_plan_execute_todo_and_tool_loop(tmp_path, monkeypa
     assert "Planner: generated execution plan" in outcome.raw
     assert "Completed Step 1/1" in outcome.raw
     assert "Todo Panel:" in outcome.raw
+    assert "Todo Panel cleared after all items completed." in outcome.raw
     assert target.exists()
     assert not source.exists()
-    assert outcome.todos is not None
-    assert outcome.todos[0].status == "completed"
+    assert outcome.todos is None
 
 
 def test_session_preserves_multi_turn_history(monkeypatch):
@@ -608,8 +608,8 @@ def test_run_single_step_can_organize_workspace_with_todos_and_notepad(
     assert any(tool_call.name == "bash" for tool_call in outcome.tool_calls)
     assert any(tool_call.name == "file_write" for tool_call in outcome.tool_calls)
     assert any(tool_call.name == "file_edit" for tool_call in outcome.tool_calls)
-    assert outcome.todos is not None
-    assert all(todo.status == "completed" for todo in outcome.todos)
+    assert "Todo Panel cleared after all items completed." in outcome.raw
+    assert outcome.todos is None
     assert outcome.notepad is not None
     assert "LLM 面试题" in outcome.notepad[0]
     assert outcome.verification_nudge is None

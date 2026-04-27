@@ -105,6 +105,11 @@ Footer {
     background: #fbf8f3;
 }
 
+#composer-shell.busy {
+    border: round #d89555;
+    background: #fff4e8;
+}
+
 #composer-help {
     color: #7f766e;
     height: auto;
@@ -189,11 +194,13 @@ Footer {
 }
 
 .todo-card.completed {
-    border: round #d6cfc5;
+    border: round #cfc7bd;
+    background: #f3eee7;
 }
 
 .todo-card.in_progress {
-    border: round #ea7b2f 65%;
+    border: round #ea7b2f 80%;
+    background: #fff7ee;
 }
 
 .todo-card.pending {
@@ -208,6 +215,17 @@ Footer {
 
 .todo-kicker {
     color: #5f564d;
+}
+
+.todo-card.in_progress .todo-kicker {
+    color: #bf6431;
+    text-style: bold;
+}
+
+.todo-card.completed .todo-kicker,
+.todo-card.completed .todo-content {
+    color: #8d857c;
+    text-style: dim;
 }
 
 .todo-content {

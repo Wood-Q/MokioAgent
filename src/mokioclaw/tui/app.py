@@ -64,11 +64,18 @@ class TodoCard(Widget):
         self.todo = todo
 
     def compose(self) -> ComposeResult:
-        yield Static(
-            f"{_todo_icon(self.todo.status)} Step {self.index}",
-            classes="todo-kicker",
-        )
+        yield Static(self._kicker_text(), classes="todo-kicker", markup=False)
         yield Static(self.todo.content, classes="todo-content")
+
+    def update_todo(self, *, index: int, todo: TodoSnapshot) -> None:
+        self.index = index
+        self.todo = todo
+        self.set_classes(f"todo-card {todo.status}")
+        self.query_one(".todo-kicker", Static).update(self._kicker_text())
+        self.query_one(".todo-content", Static).update(todo.content)
+
+    def _kicker_text(self) -> str:
+        return f"{_todo_icon(self.todo.status)} Step {self.index}"
 
 
 class NoteCard(Widget):
@@ -396,14 +403,26 @@ class MokioclawTextualApp(App[None]):
 
     async def _render_todos(self, todos: list[TodoSnapshot]) -> None:
         todo_scroll = self.query_one("#todo-scroll", VerticalScroll)
-        await todo_scroll.remove_children()
+        existing_cards = list(todo_scroll.query(TodoCard))
         if not todos:
+            empty_messages = todo_scroll.query(".empty-panel-message")
+            if not existing_cards and len(empty_messages) == 1:
+                return
+            await todo_scroll.remove_children()
             await todo_scroll.mount(
                 Static("No active checklist yet.", classes="empty-panel-message")
             )
-        else:
-            for index, todo in enumerate(todos, start=1):
-                await todo_scroll.mount(TodoCard(index=index, todo=todo))
+            return
+
+        if _same_todo_structure(existing_cards, todos):
+            todo_pairs = zip(existing_cards, todos, strict=True)
+            for index, (card, todo) in enumerate(todo_pairs, start=1):
+                card.update_todo(index=index, todo=todo)
+            return
+
+        await todo_scroll.remove_children()
+        for index, todo in enumerate(todos, start=1):
+            await todo_scroll.mount(TodoCard(index=index, todo=todo))
 
     async def _render_notepad(self, notes: list[str]) -> None:
         note_scroll = self.query_one("#notepad-scroll", VerticalScroll)
@@ -428,6 +447,8 @@ class MokioclawTextualApp(App[None]):
         self._busy = busy
         input_widget = self.query_one("#chat-input", ChatComposer)
         help_widget = self.query_one("#composer-help", Static)
+        composer_shell = self.query_one("#composer-shell", Container)
+        composer_shell.set_class(busy, "busy")
         input_widget.disabled = busy
         if busy:
             help_widget.update("正在处理这一轮消息...")
@@ -449,6 +470,16 @@ def run_textual_chat(*, message: str | None, model: str) -> int:
     app = MokioclawTextualApp(model=model, initial_message=message)
     app.run()
     return 0
+
+
+def _same_todo_structure(
+    existing_cards: list[TodoCard],
+    todos: list[TodoSnapshot],
+) -> bool:
+    return len(existing_cards) == len(todos) and all(
+        card.todo.content == todo.content
+        for card, todo in zip(existing_cards, todos, strict=True)
+    )
 
 
 def _role_label(role: str) -> str:

@@ -8,7 +8,6 @@ from dataclasses import dataclass, field
 from typing import Any, cast
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
-from langchain_core.tools import BaseTool
 from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
@@ -33,7 +32,11 @@ from mokioclaw.prompts.react_prompt import (
     build_planner_system_prompt,
 )
 from mokioclaw.providers.ollama_provider import build_chat_model
-from mokioclaw.tools.registry import tools_for_agent, tools_for_prompt
+from mokioclaw.tools.selector import (
+    select_agent_tools_for_executor,
+    select_prompt_tools_for_executor,
+    select_prompt_tools_for_planner,
+)
 
 DEFAULT_RECURSION_LIMIT = 40
 MAX_REPEATED_CLARIFICATION_ATTEMPTS = 2
@@ -147,14 +150,10 @@ class CompactionStats:
 
 
 def build_plan_execute_graph(model: str):
-    tools = tools_for_agent()
     builder = StateGraph(cast(Any, MokioclawState))
     builder.add_node("planner", cast(Any, _build_planner_node(model=model)))
-    builder.add_node(
-        "executor",
-        cast(Any, _build_executor_node(model=model, tools=tools)),
-    )
-    builder.add_node("tools", ToolNode(tools, handle_tool_errors=True))
+    builder.add_node("executor", cast(Any, _build_executor_node(model=model)))
+    builder.add_node("tools", cast(Any, _build_dynamic_tools_node()))
     builder.add_node("advance", cast(Any, _build_advance_node()))
     builder.add_node("finalizer", cast(Any, _build_finalizer_node(model=model)))
     builder.add_edge(START, "planner")
@@ -192,11 +191,12 @@ def _build_planner_node(
     model: str,
 ) -> Callable[[MokioclawState], dict[str, object]]:
     llm = build_chat_model(model)
-    system_message = SystemMessage(
-        content=build_planner_system_prompt(tools_for_prompt())
-    )
-
     def plan(state: MokioclawState) -> dict[str, object]:
+        system_message = SystemMessage(
+            content=build_planner_system_prompt(
+                select_prompt_tools_for_planner(state.get("user_input", ""))
+            )
+        )
         response = llm.invoke(
             [system_message, *_project_rule_messages(), *state["messages"]]
         )
@@ -259,15 +259,17 @@ def _build_planner_node(
 def _build_executor_node(
     *,
     model: str,
-    tools: Sequence[BaseTool],
-) -> Callable[[MokioclawState], dict[str, list[BaseMessage]]]:
-    llm = build_chat_model(model).bind_tools(tools)
+) -> Callable[[MokioclawState], dict[str, list[BaseMessage] | list[str]]]:
+    base_llm = build_chat_model(model)
 
-    def execute(state: MokioclawState) -> dict[str, list[BaseMessage]]:
+    def execute(state: MokioclawState) -> dict[str, list[BaseMessage] | list[str]]:
         current_step = _current_step(state)
+        prompt_tools = select_prompt_tools_for_executor(state, current_step)
+        agent_tools = select_agent_tools_for_executor(state, current_step)
+        llm = base_llm.bind_tools(agent_tools)
         system_message = SystemMessage(
             content=build_executor_system_prompt(
-                tools=tools_for_prompt(),
+                tools=prompt_tools,
                 plan=state.get("plan", []),
                 completed_steps=state.get("completed_steps", []),
                 current_step=current_step,
@@ -278,9 +280,25 @@ def _build_executor_node(
         response = llm.invoke(
             [system_message, *_project_rule_messages(), *state["messages"]]
         )
-        return {"messages": [_coerce_ai_message(response)]}
+        return {
+            "messages": [_coerce_ai_message(response)],
+            "turn_events": [
+                "Tool Selection: executor tools -> "
+                + ", ".join(tool.name for tool in agent_tools)
+            ],
+        }
 
     return execute
+
+
+def _build_dynamic_tools_node() -> Callable[[MokioclawState], dict[str, object]]:
+    def run_tools(state: MokioclawState) -> dict[str, object]:
+        current_step = _current_step(state)
+        tools = select_agent_tools_for_executor(state, current_step)
+        node = ToolNode(tools, handle_tool_errors=True)
+        return cast(dict[str, object], node.invoke(state))
+
+    return run_tools
 
 
 def _build_advance_node() -> Callable[[MokioclawState], dict[str, object]]:
@@ -863,14 +881,13 @@ class MokioclawSession:
             )
 
         stats = self._compact_state(focus=focus, automatic=False)
+        active_todos = coerce_todo_snapshots(self.state.get("todos"))
         return LoopOutcome(
             need_tool=False,
             raw=_format_compaction_raw(stats),
             response=_format_compaction_response(stats),
             tool_calls=[],
-            todos=coerce_todo_snapshots(
-                self.state.get("todos") or self.state.get("todo_snapshot")
-            ),
+            todos=active_todos or None,
             notepad=list(self.state.get("notepad", [])) or None,
             verification_nudge=self.state.get("verification_nudge") or None,
             memory=[
@@ -928,6 +945,7 @@ class MokioclawSession:
         if auto_compaction_note:
             raw = "\n".join([auto_compaction_note, raw])
 
+        active_todos = coerce_todo_snapshots(result.get("todos"))
         return LoopOutcome(
             need_tool=bool(tool_calls),
             raw=raw,
@@ -936,9 +954,7 @@ class MokioclawSession:
                 or extract_final_response(current_turn_messages)
             ),
             tool_calls=tool_calls,
-            todos=coerce_todo_snapshots(
-                result.get("todos") or result.get("todo_snapshot")
-            ),
+            todos=active_todos or None,
             notepad=list(result.get("notepad", [])) or None,
             memory=build_short_term_memory(user_input, current_turn_messages),
             verification_nudge=result.get("verification_nudge") or None,
