@@ -29,6 +29,8 @@ def build_initial_state(user_input: str) -> MokioclawState:
         last_compaction_focus="",
         final_response="",
         verification_nudge="",
+        pending_approval=None,
+        approved_tool_call_ids=[],
         turn_events=[],
     )
 

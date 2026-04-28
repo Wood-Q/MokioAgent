@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
@@ -14,26 +15,46 @@ from textual.widget import Widget
 from textual.widgets import Footer, Header, Markdown, Static, TextArea
 
 from mokioclaw.core.loop import MokioclawSession
-from mokioclaw.core.types import LoopOutcome, TodoSnapshot
+from mokioclaw.core.memory import (
+    coerce_todo_snapshots,
+    render_notepad,
+    render_todo_panel,
+)
+from mokioclaw.core.state import PendingApprovalState
+from mokioclaw.core.types import LoopOutcome
 
 EXIT_COMMANDS = {"/exit", "/quit", "exit", "quit"}
 HELP_COMMANDS = {"/help", "help"}
 CLEAR_COMMANDS = {"/clear"}
 COMPACT_COMMAND = "/compact"
+APPROVE_COMMANDS = {"/approve", "approve"}
+DENY_COMMANDS = {"/deny", "deny"}
+TODO_COMMANDS = {"/todo", "todo"}
+NOTEPAD_COMMANDS = {"/notepad", "notepad"}
+TYPEWRITER_CHUNK_SIZE = 12
+TYPEWRITER_DELAY_SECONDS = 0.01
+THINKING_TICK_SECONDS = 0.35
+THINKING_STEPS = (
+    "Planning request...",
+    "Selecting tools...",
+    "Checking approvals...",
+    "Waiting for model response...",
+)
 
 
 @dataclass(frozen=True)
 class SessionViewState:
     response: str
-    todos: list[TodoSnapshot]
-    notepad: list[str]
     verification_nudge: str | None
+    pending_approval: PendingApprovalState | None
 
 
 class SessionLike(Protocol):
     def run_turn(self, user_input: str) -> LoopOutcome: ...
 
     def compact_session(self, focus: str | None = None) -> LoopOutcome: ...
+
+    def resolve_pending_approval(self, approved: bool) -> LoopOutcome: ...
 
     def reset(self) -> None: ...
 
@@ -56,37 +77,12 @@ class ChatCard(Widget):
         else:
             yield Markdown(self.content, classes="chat-markdown")
 
-
-class TodoCard(Widget):
-    def __init__(self, *, index: int, todo: TodoSnapshot) -> None:
-        super().__init__(classes=f"todo-card {todo.status}")
-        self.index = index
-        self.todo = todo
-
-    def compose(self) -> ComposeResult:
-        yield Static(self._kicker_text(), classes="todo-kicker", markup=False)
-        yield Static(self.todo.content, classes="todo-content")
-
-    def update_todo(self, *, index: int, todo: TodoSnapshot) -> None:
-        self.index = index
-        self.todo = todo
-        self.set_classes(f"todo-card {todo.status}")
-        self.query_one(".todo-kicker", Static).update(self._kicker_text())
-        self.query_one(".todo-content", Static).update(todo.content)
-
-    def _kicker_text(self) -> str:
-        return f"{_todo_icon(self.todo.status)} Step {self.index}"
-
-
-class NoteCard(Widget):
-    def __init__(self, *, index: int, note: str) -> None:
-        super().__init__(classes="note-card")
-        self.index = index
-        self.note = note
-
-    def compose(self) -> ComposeResult:
-        yield Static(f"Note {self.index}", classes="note-kicker")
-        yield Markdown(self.note, classes="note-markdown")
+    def update_content(self, content: str) -> None:
+        self.content = content
+        if self.role == "user":
+            self.query_one(".chat-plain", Static).update(content)
+        else:
+            self.query_one(".chat-markdown", Markdown).update(content)
 
 
 class AgentTurnReady(Message):
@@ -158,6 +154,7 @@ class MokioclawTextualApp(App[None]):
         self.initial_message = initial_message
         self.session = session or MokioclawSession(model=model)
         self._pending_card: ChatCard | None = None
+        self._thinking_task: asyncio.Task[None] | None = None
         self._busy = False
 
     def compose(self) -> ComposeResult:
@@ -172,14 +169,17 @@ class MokioclawTextualApp(App[None]):
                             "## Welcome\n\n"
                             "- 普通聊天会直接回复，不会自动当成任务执行。\n"
                             "- 需要整理文件、修改内容或查看目录时，我会进入工作流。\n"
-                            "- `/compact` 可主动压缩上下文，"
-                            "`/clear` 重置当前会话，`/exit` 结束界面。"
+                            "- 写入、编辑或移动文件前会请求 human approval。\n"
+                            "- Todo 与 NotePad 不常驻侧栏，输入 `/todo` 或 `/notepad` "
+                            "查看快照。\n"
+                            "- `/approve` 继续，`/deny` 拒绝，`/compact` 压缩上下文，"
+                            "`/clear` 重置会话。"
                         ),
                     )
                 with Container(id="composer-shell"):
                     yield Static(
                         "Enter 发送 · Shift+Enter 换行 · "
-                        "/compact 压缩 · /clear 重置 · /exit 退出",
+                        "/todo · /notepad · /approve · /deny · /compact · /clear",
                         id="composer-help",
                     )
                     with Horizontal(id="composer-row"):
@@ -193,21 +193,13 @@ class MokioclawTextualApp(App[None]):
                             id="chat-input",
                         )
             with Vertical(id="sidebar-zone"):
-                yield Static("Workspace Panels", id="sidebar-title")
-                with Vertical(id="todo-panel", classes="side-panel todo-panel"):
-                    yield Static("Todo Board", classes="panel-title")
-                    with VerticalScroll(id="todo-scroll", classes="panel-scroll"):
-                        yield Static(
-                            "No active checklist yet.",
-                            classes="empty-panel-message",
-                        )
-                with Vertical(id="notepad-panel", classes="side-panel note-panel"):
-                    yield Static("NotePad", classes="panel-title")
-                    with VerticalScroll(id="notepad-scroll", classes="panel-scroll"):
-                        yield Static(
-                            "No saved notes yet.",
-                            classes="empty-panel-message",
-                        )
+                yield Static("Runtime Panels", id="sidebar-title")
+                with Vertical(
+                    id="approval-panel",
+                    classes="side-panel approval-panel hidden",
+                ):
+                    yield Static("Human Approval", classes="panel-title")
+                    yield Static("", id="approval-text")
                 with Vertical(
                     id="verification-panel",
                     classes="side-panel verify-panel hidden",
@@ -251,15 +243,34 @@ class MokioclawTextualApp(App[None]):
                     content=(
                         "## Commands\n\n"
                         "- `/help`: show this help card\n"
+                        "- `/todo`: show the latest todo snapshot in chat\n"
+                        "- `/notepad`: show saved notepad entries in chat\n"
+                        "- `/approve`: approve pending tool calls\n"
+                        "- `/deny`: deny pending tool calls\n"
                         "- `/compact [focus]`: compact the session context\n"
-                        "- `/clear`: reset the conversation and side panels\n"
-                        "- `/exit`: quit the app"
+                        "- `/clear`: reset the conversation and runtime panels\n"
+                        "- `/exit`: quit the app\n\n"
+                        "Thinking and assistant responses stream inline. "
+                        "Todo and NotePad are shown on demand instead of "
+                        "as persistent side panels."
                     ),
                 )
             )
             return
         if user_input in CLEAR_COMMANDS:
             await self.action_clear_session()
+            return
+        if user_input in APPROVE_COMMANDS:
+            await self._begin_approval_resolution(user_input, approved=True)
+            return
+        if user_input in DENY_COMMANDS:
+            await self._begin_approval_resolution(user_input, approved=False)
+            return
+        if user_input in TODO_COMMANDS:
+            await self._show_todo_snapshot()
+            return
+        if user_input in NOTEPAD_COMMANDS:
+            await self._show_notepad_snapshot()
             return
         compact_focus = _parse_compact_command(user_input)
         if compact_focus is not None:
@@ -276,18 +287,17 @@ class MokioclawTextualApp(App[None]):
 
     async def on_agent_turn_ready(self, message: AgentTurnReady) -> None:
         await self._finish_pending_card()
-        await self._mount_chat_card(
-            ChatCard(
-                role="assistant",
-                content=message.outcome.response or "(no response)",
-            )
+        assistant_card = ChatCard(role="assistant", content="")
+        await self._mount_chat_card(assistant_card)
+        await self._stream_card_content(
+            assistant_card,
+            message.outcome.response or "(no response)",
         )
         await self._apply_outcome(
             SessionViewState(
                 response=message.outcome.response or "(no response)",
-                todos=message.outcome.todos or [],
-                notepad=message.outcome.notepad or [],
                 verification_nudge=message.outcome.verification_nudge,
+                pending_approval=message.outcome.pending_approval,
             )
         )
         self._set_busy(False)
@@ -315,6 +325,15 @@ class MokioclawTextualApp(App[None]):
         self.call_from_thread(self.post_message, AgentTurnReady(outcome))
 
     @work(thread=True, group="agent-turn", exclusive=True, exit_on_error=False)
+    def run_approval_resolution(self, approved: bool) -> None:
+        try:
+            outcome = self.session.resolve_pending_approval(approved)
+        except Exception as exc:  # pragma: no cover - covered through message branch
+            self.call_from_thread(self.post_message, AgentTurnFailed(str(exc)))
+            return
+        self.call_from_thread(self.post_message, AgentTurnReady(outcome))
+
+    @work(thread=True, group="agent-turn", exclusive=True, exit_on_error=False)
     def run_compact_turn(self, focus: str | None) -> None:
         try:
             outcome = self.session.compact_session(focus)
@@ -327,6 +346,30 @@ class MokioclawTextualApp(App[None]):
         assert self.initial_message is not None
         self.run_worker(self._begin_turn(self.initial_message))
 
+    async def _show_todo_snapshot(self) -> None:
+        state = getattr(self.session, "state", None)
+        todos = []
+        if state:
+            todos = coerce_todo_snapshots(
+                state.get("todos") or state.get("todo_snapshot")
+            )
+        content = (
+            "## Todo\n\n" + render_todo_panel(todos)
+            if todos
+            else "## Todo\n\nNo todo items yet."
+        )
+        await self._mount_chat_card(ChatCard(role="system", content=content))
+
+    async def _show_notepad_snapshot(self) -> None:
+        state = getattr(self.session, "state", None)
+        notes = list(state.get("notepad", [])) if state else []
+        content = (
+            "## NotePad\n\n" + render_notepad(notes)
+            if notes
+            else "## NotePad\n\nNo saved notes yet."
+        )
+        await self._mount_chat_card(ChatCard(role="system", content=content))
+
     async def _begin_turn(self, user_input: str) -> None:
         self._set_busy(True)
         await self._mount_chat_card(ChatCard(role="user", content=user_input))
@@ -335,13 +378,32 @@ class MokioclawTextualApp(App[None]):
             content=(
                 "### Thinking\n\n"
                 "Reviewing the latest message and preparing a reply. "
-                "If this turn needs tools or a checklist, they will appear "
-                "in the side panels."
+                "Use `/todo` or `/notepad` after the turn to inspect saved state."
             ),
         )
         self._pending_card = pending_card
         await self._mount_chat_card(pending_card)
+        self._start_thinking_stream(pending_card)
         self.run_agent_turn(user_input)
+
+    async def _begin_approval_resolution(
+        self,
+        command_text: str,
+        *,
+        approved: bool,
+    ) -> None:
+        self._set_busy(True)
+        await self._mount_chat_card(ChatCard(role="user", content=command_text))
+        pending_card = ChatCard(
+            role="thinking",
+            content=(
+                "### Resolving Approval\n\n"
+                "Applying the human approval decision to the pending tool call."
+            ),
+        )
+        self._pending_card = pending_card
+        await self._mount_chat_card(pending_card)
+        self.run_approval_resolution(approved)
 
     async def _begin_compact(
         self,
@@ -363,8 +425,7 @@ class MokioclawTextualApp(App[None]):
         self.run_compact_turn(focus)
 
     async def _apply_outcome(self, state: SessionViewState) -> None:
-        await self._render_todos(state.todos)
-        await self._render_notepad(state.notepad)
+        await self._render_pending_approval(state.pending_approval)
         verification_panel = self.query_one("#verification-panel", Vertical)
         verification_text = self.query_one("#verification-text", Static)
         if state.verification_nudge:
@@ -384,8 +445,10 @@ class MokioclawTextualApp(App[None]):
                     "## Welcome\n\n"
                     "- 普通聊天会直接回复，不会自动当成任务执行。\n"
                     "- 需要整理文件、修改内容或查看目录时，我会进入工作流。\n"
-                    "- `/compact` 可主动压缩上下文，"
-                    "`/clear` 重置当前会话，`/exit` 结束界面。"
+                    "- Thinking 与回答会在对话区流式渲染。\n"
+                    "- Todo 与 NotePad 不常驻侧栏，输入 `/todo` 或 `/notepad` "
+                    "查看快照。\n"
+                    "- `/compact` 可主动压缩上下文，`/clear` 重置会话。"
                 ),
             )
         )
@@ -396,48 +459,57 @@ class MokioclawTextualApp(App[None]):
         await chat_scroll.mount(card)
         chat_scroll.scroll_end(animate=False)
 
+    async def _stream_card_content(self, card: ChatCard, content: str) -> None:
+        if not content:
+            card.update_content("")
+            return
+        for end in range(TYPEWRITER_CHUNK_SIZE, len(content), TYPEWRITER_CHUNK_SIZE):
+            card.update_content(content[:end])
+            self.query_one("#chat-scroll", VerticalScroll).scroll_end(animate=False)
+            await asyncio.sleep(TYPEWRITER_DELAY_SECONDS)
+        card.update_content(content)
+        self.query_one("#chat-scroll", VerticalScroll).scroll_end(animate=False)
+
+    def _start_thinking_stream(self, card: ChatCard) -> None:
+        self._thinking_task = asyncio.create_task(self._run_thinking_stream(card))
+
+    async def _run_thinking_stream(self, card: ChatCard) -> None:
+        ticks = 0
+        while True:
+            step = THINKING_STEPS[ticks % len(THINKING_STEPS)]
+            dots = "." * ((ticks % 3) + 1)
+            card.update_content(f"### Thinking\n\n{step}{dots}")
+            self.query_one("#chat-scroll", VerticalScroll).scroll_end(animate=False)
+            ticks += 1
+            await asyncio.sleep(THINKING_TICK_SECONDS)
+
     async def _finish_pending_card(self) -> None:
+        if self._thinking_task is not None:
+            self._thinking_task.cancel()
+            try:
+                await self._thinking_task
+            except asyncio.CancelledError:
+                pass
+            self._thinking_task = None
         if self._pending_card is not None:
             await self._pending_card.remove()
             self._pending_card = None
 
-    async def _render_todos(self, todos: list[TodoSnapshot]) -> None:
-        todo_scroll = self.query_one("#todo-scroll", VerticalScroll)
-        existing_cards = list(todo_scroll.query(TodoCard))
-        if not todos:
-            empty_messages = todo_scroll.query(".empty-panel-message")
-            if not existing_cards and len(empty_messages) == 1:
-                return
-            await todo_scroll.remove_children()
-            await todo_scroll.mount(
-                Static("No active checklist yet.", classes="empty-panel-message")
-            )
-            return
-
-        if _same_todo_structure(existing_cards, todos):
-            todo_pairs = zip(existing_cards, todos, strict=True)
-            for index, (card, todo) in enumerate(todo_pairs, start=1):
-                card.update_todo(index=index, todo=todo)
-            return
-
-        await todo_scroll.remove_children()
-        for index, todo in enumerate(todos, start=1):
-            await todo_scroll.mount(TodoCard(index=index, todo=todo))
-
-    async def _render_notepad(self, notes: list[str]) -> None:
-        note_scroll = self.query_one("#notepad-scroll", VerticalScroll)
-        await note_scroll.remove_children()
-        if not notes:
-            await note_scroll.mount(
-                Static("No saved notes yet.", classes="empty-panel-message")
-            )
+    async def _render_pending_approval(
+        self,
+        pending_approval: PendingApprovalState | None,
+    ) -> None:
+        approval_panel = self.query_one("#approval-panel", Vertical)
+        approval_text = self.query_one("#approval-text", Static)
+        if pending_approval:
+            approval_panel.remove_class("hidden")
+            approval_text.update(str(pending_approval.get("message", "")))
         else:
-            for index, note in enumerate(notes, start=1):
-                await note_scroll.mount(NoteCard(index=index, note=note))
+            approval_panel.add_class("hidden")
+            approval_text.update("")
 
     async def _reset_panels(self) -> None:
-        await self._render_todos([])
-        await self._render_notepad([])
+        await self._render_pending_approval(None)
         verification_panel = self.query_one("#verification-panel", Vertical)
         verification_text = self.query_one("#verification-text", Static)
         verification_panel.add_class("hidden")
@@ -456,7 +528,7 @@ class MokioclawTextualApp(App[None]):
         else:
             help_widget.update(
                 "Enter 发送 · Shift+Enter 换行 · "
-                "/compact 压缩 · /clear 重置 · /exit 退出"
+                "/todo · /notepad · /compact · /clear · /exit"
             )
             self.sub_title = f"Textual Session · {self.model}"
             input_widget.focus()
@@ -472,15 +544,6 @@ def run_textual_chat(*, message: str | None, model: str) -> int:
     return 0
 
 
-def _same_todo_structure(
-    existing_cards: list[TodoCard],
-    todos: list[TodoSnapshot],
-) -> bool:
-    return len(existing_cards) == len(todos) and all(
-        card.todo.content == todo.content
-        for card, todo in zip(existing_cards, todos, strict=True)
-    )
-
 
 def _role_label(role: str) -> str:
     if role == "user":
@@ -492,14 +555,6 @@ def _role_label(role: str) -> str:
     if role == "error":
         return "Error"
     return "System"
-
-
-def _todo_icon(status: str) -> str:
-    if status == "completed":
-        return "[x]"
-    if status == "in_progress":
-        return "[-]"
-    return "[ ]"
 
 
 def _parse_compact_command(user_input: str) -> str | None:

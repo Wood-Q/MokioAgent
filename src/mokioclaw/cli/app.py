@@ -7,7 +7,12 @@ from typing import Annotated
 import typer
 
 from mokioclaw.core.loop import MokioclawSession, run_single_step
-from mokioclaw.core.memory import render_notepad, render_todo_panel
+from mokioclaw.core.memory import (
+    coerce_todo_snapshots,
+    render_notepad,
+    render_todo_panel,
+)
+from mokioclaw.core.state import PendingApprovalState
 from mokioclaw.core.types import LoopOutcome
 from mokioclaw.providers.ollama_provider import default_model
 from mokioclaw.tui.app import run_textual_chat
@@ -22,6 +27,10 @@ EXIT_COMMANDS = {"/exit", "/quit", "exit", "quit"}
 HELP_COMMANDS = {"/help", "help"}
 CLEAR_COMMANDS = {"/clear"}
 COMPACT_COMMAND = "/compact"
+APPROVE_COMMANDS = {"/approve", "approve"}
+DENY_COMMANDS = {"/deny", "deny"}
+TODO_COMMANDS = {"/todo", "todo"}
+NOTEPAD_COMMANDS = {"/notepad", "notepad"}
 
 
 class UIChoice(StrEnum):
@@ -99,12 +108,8 @@ def _stdin_is_interactive() -> bool:
 
 
 def _render_chat_turn(outcome: LoopOutcome) -> None:
-    if outcome.todos:
-        typer.echo("\nTodo>")
-        typer.echo(render_todo_panel(outcome.todos))
-    if outcome.notepad:
-        typer.echo("\nNotePad>")
-        typer.echo(render_notepad(outcome.notepad))
+    if outcome.pending_approval:
+        _render_pending_approval(outcome.pending_approval)
     if outcome.verification_nudge:
         typer.echo("\nVerifier>")
         typer.echo(outcome.verification_nudge)
@@ -112,8 +117,32 @@ def _render_chat_turn(outcome: LoopOutcome) -> None:
     typer.echo(f"\nAssistant> {response}")
 
 
+def _render_pending_approval(pending_approval: PendingApprovalState) -> None:
+    typer.echo("\nApproval Required>")
+    typer.echo(str(pending_approval.get("message", "")))
+
+
 def _render_chat_help() -> None:
-    typer.echo("Commands: /help, /clear, /compact [focus], /exit")
+    typer.echo(
+        "Commands: /help, /todo, /notepad, /clear, "
+        "/compact [focus], /approve, /deny, /exit"
+    )
+
+
+def _render_session_todos(session: MokioclawSession) -> None:
+    state = getattr(session, "state", None)
+    todos = []
+    if state:
+        todos = coerce_todo_snapshots(state.get("todos") or state.get("todo_snapshot"))
+    typer.echo("\nTodo>")
+    typer.echo(render_todo_panel(todos) if todos else "No todo items yet.")
+
+
+def _render_session_notepad(session: MokioclawSession) -> None:
+    state = getattr(session, "state", None)
+    notes = list(state.get("notepad", [])) if state else []
+    typer.echo("\nNotePad>")
+    typer.echo(render_notepad(notes) if notes else "No saved notes yet.")
 
 
 def _parse_compact_command(user_input: str) -> str | None:
@@ -155,6 +184,20 @@ def _run_chat_session(message: str | None, model: str) -> int:
         if user_input in CLEAR_COMMANDS:
             session.reset()
             typer.echo("\nSession cleared.")
+            continue
+        if user_input in APPROVE_COMMANDS:
+            outcome = session.resolve_pending_approval(approved=True)
+            _render_chat_turn(outcome)
+            continue
+        if user_input in DENY_COMMANDS:
+            outcome = session.resolve_pending_approval(approved=False)
+            _render_chat_turn(outcome)
+            continue
+        if user_input in TODO_COMMANDS:
+            _render_session_todos(session)
+            continue
+        if user_input in NOTEPAD_COMMANDS:
+            _render_session_notepad(session)
             continue
         compact_focus = _parse_compact_command(user_input)
         if compact_focus is not None:

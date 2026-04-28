@@ -147,17 +147,251 @@ def test_run_single_step_uses_plan_execute_todo_and_tool_loop(tmp_path, monkeypa
     )
 
     assert outcome.need_tool is True
-    assert outcome.response == "文件已经移动完成。"
+    assert outcome.pending_approval is not None
+    assert "Human approval required" in (outcome.response or "")
     assert outcome.tool_calls is not None
     assert any(tool_call.name == "todo_write" for tool_call in outcome.tool_calls)
-    assert any(tool_call.name == "move_file" for tool_call in outcome.tool_calls)
+    pending_move = next(
+        tool_call for tool_call in outcome.tool_calls if tool_call.name == "move_file"
+    )
+    assert pending_move.result is None
     assert "Planner: generated execution plan" in outcome.raw
-    assert "Completed Step 1/1" in outcome.raw
-    assert "Todo Panel:" in outcome.raw
-    assert "Todo Panel cleared after all items completed." in outcome.raw
+    assert "Approval: waiting for human approval" in outcome.raw
+    assert source.exists()
+    assert not target.exists()
+
+
+def test_move_file_requires_human_approval_before_execution(tmp_path, monkeypatch):
+    source = tmp_path / "demo" / "a.txt"
+    target = tmp_path / "archive" / "a.txt"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("hello", encoding="utf-8")
+
+    planner = StageModel(
+        stage="planner",
+        responses=[_planner_payload(["Move the file from source to target."])],
+    )
+    executor = StageModel(
+        stage="executor",
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    _tool_call(
+                        "move_file",
+                        {"src": str(source), "dst": str(target)},
+                        "call_1",
+                    )
+                ],
+            ),
+        ],
+    )
+    finalizer = StageModel(stage="finalizer", responses=[])
+
+    monkeypatch.setattr(
+        loop,
+        "build_chat_model",
+        _build_chat_model_factory(planner, executor, finalizer),
+    )
+
+    outcome = loop.run_single_step(f"把 {source} 移动到 {target}", model="demo-model")
+
+    assert outcome.pending_approval is not None
+    assert "Human approval required" in (outcome.response or "")
+    assert source.exists()
+    assert not target.exists()
+
+
+def test_denied_approval_does_not_execute_tool(tmp_path, monkeypatch):
+    source = tmp_path / "demo" / "a.txt"
+    target = tmp_path / "archive" / "a.txt"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("hello", encoding="utf-8")
+
+    planner = StageModel(
+        stage="planner",
+        responses=[_planner_payload(["Move the file from source to target."])],
+    )
+    executor = StageModel(
+        stage="executor",
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    _tool_call(
+                        "move_file",
+                        {"src": str(source), "dst": str(target)},
+                        "call_1",
+                    )
+                ],
+            ),
+        ],
+    )
+    finalizer = StageModel(stage="finalizer", responses=[])
+
+    monkeypatch.setattr(
+        loop,
+        "build_chat_model",
+        _build_chat_model_factory(planner, executor, finalizer),
+    )
+
+    session = loop.MokioclawSession(model="demo-model")
+    first = session.run_turn(f"把 {source} 移动到 {target}")
+    denied = session.resolve_pending_approval(approved=False)
+
+    assert first.pending_approval is not None
+    assert denied.response == "已取消执行需要审批的工具调用。"
+    assert source.exists()
+    assert not target.exists()
+
+
+def test_approved_tool_call_resumes_execution(tmp_path, monkeypatch):
+    source = tmp_path / "demo" / "a.txt"
+    target = tmp_path / "archive" / "a.txt"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("hello", encoding="utf-8")
+
+    planner = StageModel(
+        stage="planner",
+        responses=[_planner_payload(["Move the file from source to target."])],
+    )
+    executor = StageModel(
+        stage="executor",
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    _tool_call(
+                        "move_file",
+                        {"src": str(source), "dst": str(target)},
+                        "call_1",
+                    )
+                ],
+            ),
+            AIMessage(content="步骤完成：文件已移动。"),
+        ],
+    )
+    finalizer = StageModel(
+        stage="finalizer",
+        responses=[AIMessage(content="文件已经移动完成。")],
+    )
+
+    monkeypatch.setattr(
+        loop,
+        "build_chat_model",
+        _build_chat_model_factory(planner, executor, finalizer),
+    )
+
+    session = loop.MokioclawSession(model="demo-model")
+    first = session.run_turn(f"把 {source} 移动到 {target}")
+    approved = session.resolve_pending_approval(approved=True)
+
+    assert first.pending_approval is not None
+    assert approved.pending_approval is None
+    assert approved.response == "文件已经移动完成。"
     assert target.exists()
     assert not source.exists()
-    assert outcome.todos is None
+
+
+def test_low_risk_todo_tool_does_not_require_approval(monkeypatch):
+    planner = StageModel(
+        stage="planner",
+        responses=[_planner_payload(["Create a todo panel."])],
+    )
+    executor = StageModel(
+        stage="executor",
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    _tool_call(
+                        "todo_write",
+                        {
+                            "todos": [
+                                {
+                                    "content": "Create a todo panel.",
+                                    "status": "completed",
+                                }
+                            ]
+                        },
+                        "call_1",
+                    )
+                ],
+            ),
+            AIMessage(content="步骤完成。"),
+        ],
+    )
+    finalizer = StageModel(stage="finalizer", responses=[AIMessage(content="完成。")])
+
+    monkeypatch.setattr(
+        loop,
+        "build_chat_model",
+        _build_chat_model_factory(planner, executor, finalizer),
+    )
+
+    outcome = loop.run_single_step("创建 todo", model="demo-model")
+
+    assert outcome.pending_approval is None
+    assert outcome.response == "完成。"
+
+
+def test_file_placement_request_overrides_bad_planner_response(monkeypatch):
+    planner = StageModel(
+        stage="planner",
+        responses=[
+            _planner_payload([
+                "创建 asserts 文件夹",
+                "写入 /tmp/test.txt 作为测试文件",
+            ])
+        ],
+    )
+    executor = StageModel(
+        stage="executor",
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    _tool_call(
+                        "move_file",
+                        {"src": "logo.png", "dst": "asserts/logo.png"},
+                        "call_1",
+                    )
+                ],
+            )
+        ],
+    )
+    finalizer = StageModel(stage="finalizer", responses=[])
+    monkeypatch.setattr(
+        loop,
+        "build_chat_model",
+        _build_chat_model_factory(planner, executor, finalizer),
+    )
+
+    outcome = loop.run_single_step(
+        "能否建立一个asserts文件夹并把logo.png放进去",
+        model="demo-model",
+    )
+
+    assert outcome.pending_approval is not None
+    assert outcome.tool_calls is not None
+    assert outcome.tool_calls[0].arguments == {
+        "src": "logo.png",
+        "dst": "asserts/logo.png",
+    }
+    assert "test.txt" not in outcome.raw
+
+
+def test_model_end_token_is_removed_from_casual_response(monkeypatch):
+    class CasualChatModel:
+        def invoke(self, messages: list[object]) -> AIMessage:
+            return AIMessage(content="你好！有什么我可以帮你的吗？<|im_end|>")
+
+    monkeypatch.setattr(loop, "build_chat_model", lambda model: CasualChatModel())
+
+    outcome = loop.MokioclawSession(model="demo-model").run_turn("你好")
+
+    assert outcome.response == "你好！有什么我可以帮你的吗？"
+    assert "<|im_end|>" not in outcome.raw
 
 
 def test_session_preserves_multi_turn_history(monkeypatch):
@@ -590,29 +824,23 @@ def test_run_single_step_can_organize_workspace_with_todos_and_notepad(
     )
 
     assert outcome.response is not None
-    assert "整理完成" in outcome.response
-    assert renamed_demo_ai.exists()
-    assert renamed_demo_plan.exists()
-    assert renamed_demo_growth.exists()
-    assert renamed_archive_llm.exists()
-    assert "# demo 内容概览" in (demo_dir / "summary.md").read_text(encoding="utf-8")
-    assert "整理结论：" in (demo_dir / "summary.md").read_text(encoding="utf-8")
-    assert "archive 内容概览" in (archive_dir / "summary.md").read_text(
-        encoding="utf-8"
-    )
+    assert "Human approval required" in outcome.response
+    assert outcome.pending_approval is not None
+    assert not renamed_demo_ai.exists()
+    assert not renamed_demo_plan.exists()
+    assert not renamed_demo_growth.exists()
+    assert not renamed_archive_llm.exists()
+    assert not (demo_dir / "summary.md").exists()
+    assert not (archive_dir / "summary.md").exists()
     assert "Planner: generated execution plan" in outcome.raw
-    assert "Completed Step 4/4" in outcome.raw
+    assert "Approval: waiting for human approval" in outcome.raw
     assert outcome.tool_calls is not None
     assert any(tool_call.name == "todo_write" for tool_call in outcome.tool_calls)
     assert any(tool_call.name == "notepad_write" for tool_call in outcome.tool_calls)
     assert any(tool_call.name == "bash" for tool_call in outcome.tool_calls)
-    assert any(tool_call.name == "file_write" for tool_call in outcome.tool_calls)
-    assert any(tool_call.name == "file_edit" for tool_call in outcome.tool_calls)
-    assert "Todo Panel cleared after all items completed." in outcome.raw
-    assert outcome.todos is None
+    assert any(tool_call.name == "move_file" for tool_call in outcome.tool_calls)
     assert outcome.notepad is not None
     assert "LLM 面试题" in outcome.notepad[0]
-    assert outcome.verification_nudge is None
 
 
 def test_complex_plan_without_verification_emits_nudge(monkeypatch):

@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from mokioclaw.core.state import PendingApprovalState
+
 
 @dataclass
 class TodoSnapshot:
@@ -28,3 +30,4 @@ class LoopOutcome:
     memory: list[str] | None = None
     verification_nudge: str | None = None
     tool_error: str | None = None
+    pending_approval: PendingApprovalState | None = None

@@ -160,10 +160,89 @@ def test_cli_runs_interactive_chat_until_exit(monkeypatch):
 
     assert result.exit_code == 0
     assert "Mokioclaw chat mode" in result.output
-    assert "Todo>" in result.output
+    assert "Todo>" not in result.output
     assert "Assistant> 你想按主题分类，还是统一格式？" in result.output
     assert "Assistant> 好的，我会按主题分类整理。" in result.output
     assert "Session ended." in result.output
+
+
+def test_cli_plain_chat_supports_todo_and_notepad_commands(monkeypatch):
+    class FakeSession(MokioclawSession):
+        def __init__(self, model: str):
+            self.model = model
+            self.state = {
+                "todos": [],
+                "todo_snapshot": [
+                    {"content": "读取目录", "status": "completed"},
+                    {"content": "整理文件", "status": "in_progress"},
+                ],
+                "notepad": ["目录中包含 2 个文本文件"],
+            }
+
+        def reset(self) -> None:
+            return None
+
+        def run_turn(self, user_input: str) -> LoopOutcome:
+            raise AssertionError("run_turn should not be used for state commands")
+
+    monkeypatch.setattr(cli_app, "MokioclawSession", FakeSession)
+    monkeypatch.setattr(cli_app, "_stdin_is_interactive", lambda: True)
+
+    result = runner.invoke(
+        cli_app.app,
+        ["--ui", "plain"],
+        input="/todo\n/notepad\n/exit\n",
+    )
+
+    assert result.exit_code == 0
+    assert "Todo>" in result.output
+    assert "[x] 读取目录" in result.output
+    assert "NotePad>" in result.output
+    assert "目录中包含 2 个文本文件" in result.output
+
+
+def test_cli_plain_chat_supports_approval_commands(monkeypatch):
+    class FakeSession(MokioclawSession):
+        def __init__(self, model: str):
+            self.model = model
+            self.decisions: list[bool] = []
+
+        def reset(self) -> None:
+            return None
+
+        def run_turn(self, user_input: str) -> LoopOutcome:
+            return LoopOutcome(
+                need_tool=True,
+                raw="Approval: waiting",
+                response="Human approval required before executing this action.",
+                pending_approval={
+                    "id": "call_1",
+                    "message": "Human approval required before executing this action.",
+                    "tool_calls": [],
+                },
+            )
+
+        def resolve_pending_approval(self, approved: bool) -> LoopOutcome:
+            self.decisions.append(approved)
+            return LoopOutcome(
+                need_tool=False,
+                raw="Approval resolved",
+                response="approval resolved",
+            )
+
+    monkeypatch.setattr(cli_app, "MokioclawSession", FakeSession)
+    monkeypatch.setattr(cli_app, "_stdin_is_interactive", lambda: True)
+
+    result = runner.invoke(
+        cli_app.app,
+        ["--ui", "plain"],
+        input="move file\n/approve\n/exit\n",
+    )
+
+    assert result.exit_code == 0
+    assert "Approval Required>" in result.output
+    assert "Human approval required" in result.output
+    assert "Assistant> approval resolved" in result.output
 
 
 def test_cli_plain_chat_supports_compact_command(monkeypatch):

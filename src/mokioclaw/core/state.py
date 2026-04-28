@@ -18,6 +18,20 @@ class TodoItem(TypedDict):
     status: str
 
 
+class ApprovalToolCallState(TypedDict):
+    id: str
+    name: str
+    args: dict[str, object]
+    risk_level: str
+    reason: str
+
+
+class PendingApprovalState(TypedDict):
+    id: str
+    tool_calls: list[ApprovalToolCallState]
+    message: str
+
+
 def merge_text_lists(
     left: list[str] | None,
     right: list[str] | None,
@@ -74,4 +88,6 @@ class MokioclawState(TypedDict, total=False):
     last_compaction_focus: NotRequired[str]
     final_response: NotRequired[str]
     verification_nudge: NotRequired[str]
+    pending_approval: NotRequired[PendingApprovalState | None]
+    approved_tool_call_ids: NotRequired[list[str]]
     turn_events: NotRequired[Annotated[list[str], merge_text_lists]]

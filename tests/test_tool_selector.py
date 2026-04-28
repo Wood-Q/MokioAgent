@@ -27,8 +27,25 @@ def test_planner_exposes_only_matching_file_tools():
     assert _tool_names(tools) == ["move_file"]
 
 
+def test_planner_exposes_tools_for_put_file_into_new_folder_request():
+    tools = select_prompt_tools_for_planner(
+        "能否建立一个asserts文件夹并把logo.png放进去"
+    )
+
+    assert _tool_names(tools) == ["move_file"]
+
+
 def test_planner_does_not_expose_tools_for_plain_chat():
     assert select_prompt_tools_for_planner("你好，介绍一下你自己") == []
+
+
+def test_executor_selects_move_and_write_for_put_file_into_folder_step():
+    tools = select_prompt_tools_for_executor(
+        _state("能否建立一个asserts文件夹并把logo.png放进去"),
+        "建立 asserts 文件夹并把 logo.png 放进去",
+    )
+
+    assert _tool_names(tools) == ["todo_write", "notepad_write", "move_file"]
 
 
 def test_executor_always_gets_session_tools():

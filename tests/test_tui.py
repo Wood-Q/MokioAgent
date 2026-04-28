@@ -6,7 +6,7 @@ from textual.containers import Container
 from textual.widgets import Static
 
 from mokioclaw.core.types import LoopOutcome, TodoSnapshot
-from mokioclaw.tui.app import ChatComposer, MokioclawTextualApp, TodoCard
+from mokioclaw.tui.app import ChatComposer, MokioclawTextualApp
 
 
 class FakeSession:
@@ -43,6 +43,13 @@ class FakeSession:
             notepad=["## Compacted\n\n- session summary refreshed"],
         )
 
+    def resolve_pending_approval(self, approved: bool) -> LoopOutcome:
+        return LoopOutcome(
+            need_tool=False,
+            raw="Approval resolved.",
+            response="approval resolved.",
+        )
+
     def reset(self) -> None:
         self.reset_calls += 1
 
@@ -55,13 +62,15 @@ def test_textual_app_renders_shell():
             assert app.query_one("#chat-input", ChatComposer)
             assert app.query_one("#composer-prefix", Static)
             assert app.query_one("#conversation-zone")
-            assert app.query_one("#todo-panel")
-            assert app.query_one("#notepad-panel")
+            assert app.query_one("#approval-panel")
+            assert app.query_one("#verification-panel")
+            assert len(app.query(".todo-card")) == 0
+            assert len(app.query(".note-card")) == 0
 
     asyncio.run(_run())
 
 
-def test_textual_app_submits_input_and_updates_side_panels():
+def test_textual_app_submits_input_and_streams_assistant_response():
     async def _run() -> None:
         session = FakeSession()
         app = MokioclawTextualApp(model="demo-model", session=session)
@@ -74,73 +83,102 @@ def test_textual_app_submits_input_and_updates_side_panels():
 
             assert session.turns == ["organize files"]
             assert len(app.query(".chat-card.user")) == 1
+            assert len(app.query(".chat-card.thinking")) == 0
             assert len(app.query(".chat-card.assistant")) == 1
-            assert len(app.query(".todo-card")) == 2
-            assert len(app.query(".note-card")) == 1
+            assistant_card = app.query(".chat-card.assistant").last()
+            assert "整理完成" in assistant_card.content
+            assert len(app.query(".todo-card")) == 0
+            assert len(app.query(".note-card")) == 0
             verification_text = app.query_one("#verification-text", Static)
             assert "verification step" in str(verification_text.render())
 
     asyncio.run(_run())
 
 
-class CompletedTodoSession(FakeSession):
+class ApprovalSession(FakeSession):
+    def __init__(self) -> None:
+        super().__init__()
+        self.decisions: list[bool] = []
+
     def run_turn(self, user_input: str) -> LoopOutcome:
         self.turns.append(user_input)
         return LoopOutcome(
             need_tool=True,
-            raw="Todo Panel cleared after all items completed.",
-            response="任务完成。",
-            todos=None,
+            raw="Approval: waiting",
+            response="Human approval required before executing this action.",
+            pending_approval={
+                "id": "call_1",
+                "message": "Human approval required before executing this action.",
+                "tool_calls": [],
+            },
+        )
+
+    def resolve_pending_approval(self, approved: bool) -> LoopOutcome:
+        self.decisions.append(approved)
+        return LoopOutcome(
+            need_tool=False,
+            raw="Approval resolved.",
+            response="approval resolved.",
+            pending_approval=None,
         )
 
 
-def test_textual_app_clears_todo_panel_when_outcome_has_no_active_todos():
+
+def test_textual_app_renders_and_resolves_approval_panel():
     async def _run() -> None:
-        session = CompletedTodoSession()
+        session = ApprovalSession()
         app = MokioclawTextualApp(model="demo-model", session=session)
         async with app.run_test(size=(140, 40)) as pilot:
             await pilot.pause()
             input_widget = app.query_one("#chat-input", ChatComposer)
-            input_widget.load_text("finish task")
+            input_widget.load_text("move file")
             await pilot.press("enter")
             await pilot.pause(0.4)
 
-            assert len(app.query(".todo-card")) == 0
-            empty_message = app.query_one("#todo-scroll .empty-panel-message", Static)
-            assert "No active checklist yet." in str(empty_message.render())
+            approval_panel = app.query_one("#approval-panel")
+            approval_text = app.query_one("#approval-text", Static)
+            assert not approval_panel.has_class("hidden")
+            assert "Human approval required" in str(approval_text.render())
+
+            input_widget.load_text("/approve")
+            await pilot.press("enter")
+            await pilot.pause(0.4)
+
+            assert session.decisions == [True]
+            assert approval_panel.has_class("hidden")
 
     asyncio.run(_run())
 
 
-def test_textual_todo_render_updates_existing_cards_for_status_only_changes():
+def test_textual_todo_and_notepad_commands_render_snapshots_in_chat():
     async def _run() -> None:
-        app = MokioclawTextualApp(model="demo-model", session=FakeSession())
+        session = FakeSession()
+        session.state = {
+            "todos": [],
+            "todo_snapshot": [
+                {"content": "读取目录", "status": "completed"},
+                {"content": "整理文件", "status": "in_progress"},
+            ],
+            "notepad": ["## Findings\n\n- archive has interview notes"],
+        }
+        app = MokioclawTextualApp(model="demo-model", session=session)
         async with app.run_test(size=(140, 40)) as pilot:
             await pilot.pause()
-            await app._render_todos(
-                [
-                    TodoSnapshot(content="读取目录", status="in_progress"),
-                    TodoSnapshot(content="整理文件", status="pending"),
-                ]
-            )
-            await pilot.pause()
-            original_cards = list(app.query(TodoCard))
+            input_widget = app.query_one("#chat-input", ChatComposer)
 
-            await app._render_todos(
-                [
-                    TodoSnapshot(content="读取目录", status="completed"),
-                    TodoSnapshot(content="整理文件", status="in_progress"),
-                ]
-            )
-            await pilot.pause()
-            updated_cards = list(app.query(TodoCard))
+            input_widget.load_text("/todo")
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+            todo_card = app.query(".chat-card.system").last()
+            assert "## Todo" in todo_card.content
+            assert "读取目录" in todo_card.content
 
-            assert updated_cards == original_cards
-            assert updated_cards[0].has_class("completed")
-            assert updated_cards[1].has_class("in_progress")
-            assert "[x] Step 1" in str(
-                updated_cards[0].query_one(".todo-kicker", Static).render()
-            )
+            input_widget.load_text("/notepad")
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+            notepad_card = app.query(".chat-card.system").last()
+            assert "## NotePad" in notepad_card.content
+            assert "archive has interview notes" in notepad_card.content
 
     asyncio.run(_run())
 
@@ -175,6 +213,9 @@ def test_textual_app_clear_command_resets_session():
             assert session.reset_calls == 1
             assert len(app.query(".todo-card")) == 0
             assert len(app.query(".note-card")) == 0
+            welcome_card = app.query(".chat-card.system").last()
+            assert "/todo" in welcome_card.content
+            assert "/notepad" in welcome_card.content
 
     asyncio.run(_run())
 

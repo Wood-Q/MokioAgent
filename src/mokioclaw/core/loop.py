@@ -7,10 +7,16 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, cast
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
-from langgraph.prebuilt import ToolNode, tools_condition
+from langgraph.prebuilt import ToolNode
 
 from mokioclaw.core.context import RunContext
 from mokioclaw.core.memory import (
@@ -25,6 +31,11 @@ from mokioclaw.core.memory import (
 from mokioclaw.core.project_rules import load_project_rule_messages
 from mokioclaw.core.state import MokioclawState, TodoItem
 from mokioclaw.core.types import LoopOutcome
+from mokioclaw.harness.approvals import (
+    approval_from_state,
+    approval_to_state,
+    collect_pending_approvals,
+)
 from mokioclaw.prompts.react_prompt import (
     build_compact_system_prompt,
     build_executor_system_prompt,
@@ -151,12 +162,22 @@ class CompactionStats:
 
 def build_plan_execute_graph(model: str):
     builder = StateGraph(cast(Any, MokioclawState))
+    builder.add_node("entry", cast(Any, _build_entry_node()))
     builder.add_node("planner", cast(Any, _build_planner_node(model=model)))
     builder.add_node("executor", cast(Any, _build_executor_node(model=model)))
+    builder.add_node("approval", cast(Any, _build_approval_node()))
     builder.add_node("tools", cast(Any, _build_dynamic_tools_node()))
     builder.add_node("advance", cast(Any, _build_advance_node()))
     builder.add_node("finalizer", cast(Any, _build_finalizer_node(model=model)))
-    builder.add_edge(START, "planner")
+    builder.add_edge(START, "entry")
+    builder.add_conditional_edges(
+        "entry",
+        _route_after_entry,
+        {
+            "planner": "planner",
+            "tools": "tools",
+        },
+    )
     builder.add_conditional_edges(
         "planner",
         _route_after_planner,
@@ -167,12 +188,14 @@ def build_plan_execute_graph(model: str):
     )
     builder.add_conditional_edges(
         "executor",
-        tools_condition,
+        _route_after_executor,
         {
+            "approval": "approval",
             "tools": "tools",
-            "__end__": "advance",
+            "advance": "advance",
         },
     )
+    builder.add_edge("approval", END)
     builder.add_edge("tools", "executor")
     builder.add_conditional_edges(
         "advance",
@@ -184,6 +207,13 @@ def build_plan_execute_graph(model: str):
     )
     builder.add_edge("finalizer", END)
     return builder.compile(name="mokioclaw-plan-execute-graph")
+
+
+def _build_entry_node() -> Callable[[MokioclawState], dict[str, object]]:
+    def enter(state: MokioclawState) -> dict[str, object]:
+        return {}
+
+    return enter
 
 
 def _build_planner_node(
@@ -201,6 +231,11 @@ def _build_planner_node(
             [system_message, *_project_rule_messages(), *state["messages"]]
         )
         decision = _parse_planner_response(_coerce_ai_message(response))
+        deterministic_decision = _deterministic_file_placement_plan(
+            state.get("user_input", "")
+        )
+        if deterministic_decision is not None:
+            decision = deterministic_decision
         if decision.steps:
             events = [
                 "Planner: generated execution plan",
@@ -220,6 +255,8 @@ def _build_planner_node(
                 "last_clarification_signature": "",
                 "final_response": "",
                 "verification_nudge": "",
+                "pending_approval": None,
+                "approved_tool_call_ids": [],
                 "turn_events": events,
             }
 
@@ -236,6 +273,8 @@ def _build_planner_node(
                 "todos": [],
                 "todo_snapshot": [],
                 "notepad": [],
+                "pending_approval": None,
+                "approved_tool_call_ids": [],
                 **clarification_result,
             }
 
@@ -250,6 +289,8 @@ def _build_planner_node(
             "last_clarification_signature": "",
             "final_response": direct_response,
             "verification_nudge": "",
+            "pending_approval": None,
+            "approved_tool_call_ids": [],
             "turn_events": ["Planner: returned a direct response without execution."],
         }
 
@@ -289,6 +330,22 @@ def _build_executor_node(
         }
 
     return execute
+
+
+def _build_approval_node() -> Callable[[MokioclawState], dict[str, object]]:
+    def request_approval(state: MokioclawState) -> dict[str, object]:
+        approval = _pending_approval_for_state(state)
+        if approval is None:
+            return {"pending_approval": None}
+        return {
+            "pending_approval": approval_to_state(approval),
+            "final_response": approval.message,
+            "turn_events": [
+                "Approval: waiting for human approval before executing tool calls."
+            ],
+        }
+
+    return request_approval
 
 
 def _build_dynamic_tools_node() -> Callable[[MokioclawState], dict[str, object]]:
@@ -377,14 +434,40 @@ def _build_finalizer_node(
     return finalize
 
 
+def _route_after_entry(state: MokioclawState) -> str:
+    return "tools" if state.get("approved_tool_call_ids") else "planner"
+
+
 def _route_after_planner(state: MokioclawState) -> str:
     return "executor" if state.get("plan") else "finalizer"
+
+
+def _route_after_executor(state: MokioclawState) -> str:
+    if not _last_ai_tool_calls(state):
+        return "advance"
+    if _pending_approval_for_state(state) is not None:
+        return "approval"
+    return "tools"
 
 
 def _route_after_advance(state: MokioclawState) -> str:
     if state.get("current_step_index", 0) < len(state.get("plan", [])):
         return "executor"
     return "finalizer"
+
+
+def _last_ai_tool_calls(state: MokioclawState) -> list[dict[str, Any]]:
+    for message in reversed(state.get("messages", [])):
+        if isinstance(message, AIMessage):
+            return cast(list[dict[str, Any]], list(message.tool_calls or []))
+    return []
+
+
+def _pending_approval_for_state(state: MokioclawState):
+    return collect_pending_approvals(
+        _last_ai_tool_calls(state),
+        set(state.get("approved_tool_call_ids", [])),
+    )
 
 
 def _current_step(state: MokioclawState) -> str:
@@ -481,6 +564,38 @@ def _parse_planner_response(message: AIMessage) -> PlannerDecision:
             missing_information=_infer_missing_information(text),
         )
     return PlannerDecision(steps=[], final_response=text)
+
+
+def _deterministic_file_placement_plan(user_input: str) -> PlannerDecision | None:
+    folder = _extract_target_folder(user_input)
+    file_name = _extract_file_name(user_input)
+    if folder is None or file_name is None:
+        return None
+
+    target = f"{folder}/{file_name}"
+    return PlannerDecision(
+        steps=[f"将 {file_name} 移动到 {target}。"],
+    )
+
+
+def _extract_target_folder(text: str) -> str | None:
+    patterns = (
+        r"(?:建立|创建|新建)(?:一个)?(?P<folder>[A-Za-z0-9_.-]+)文件夹",
+        r"(?P<folder>[A-Za-z0-9_.-]+)文件夹",
+        r"(?:放进|放到|放入|移动到|移到)(?P<folder>[A-Za-z0-9_.-]+)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return match.group("folder")
+    return None
+
+
+def _extract_file_name(text: str) -> str | None:
+    match = re.search(r"(?P<file>[A-Za-z0-9_.-]+\.[A-Za-z0-9]+)", text)
+    if match is None:
+        return None
+    return match.group("file")
 
 
 def _extract_json_object(text: str) -> dict[str, object] | None:
@@ -759,7 +874,7 @@ def _coerce_ai_message(message: BaseMessage) -> AIMessage:
 
 def _stringify_content(content: Any) -> str:
     if isinstance(content, str):
-        return content
+        return _clean_model_text(content)
     if isinstance(content, list):
         parts: list[str] = []
         for item in content:
@@ -774,6 +889,10 @@ def _stringify_content(content: Any) -> str:
             parts.append(str(item))
         return "\n".join(parts)
     return str(cast(object, content))
+
+
+def _clean_model_text(text: str) -> str:
+    return text.replace("<|im_end|>", "").strip()
 
 
 def _sync_todos_after_step(
@@ -871,6 +990,82 @@ class MokioclawSession:
     def reset(self) -> None:
         self.state = None
 
+    def has_pending_approval(self) -> bool:
+        return bool(self.state and self.state.get("pending_approval"))
+
+    def resolve_pending_approval(self, approved: bool) -> LoopOutcome:
+        if self.state is None or not self.state.get("pending_approval"):
+            return LoopOutcome(
+                need_tool=False,
+                raw="Approval: no pending approval request.",
+                response="当前没有等待审批的工具调用。",
+                tool_calls=[],
+            )
+
+        pending_approval_state = self.state["pending_approval"]
+        assert pending_approval_state is not None
+        pending_approval = approval_from_state(
+            cast(dict[str, Any], pending_approval_state)
+        )
+        prior_message_count = len(self.state["messages"])
+        if not approved:
+            rejected_messages = [
+                ToolMessage(
+                    content=(
+                        "Tool call rejected by human approval. "
+                        "Do not retry this action unless the user asks again."
+                    ),
+                    name=tool_call.name,
+                    tool_call_id=tool_call.id,
+                )
+                for tool_call in pending_approval.tool_calls
+            ]
+            self.state = cast(
+                MokioclawState,
+                {
+                    **self.state,
+                    "messages": [*self.state["messages"], *rejected_messages],
+                    "pending_approval": None,
+                    "approved_tool_call_ids": [],
+                    "final_response": "已取消执行需要审批的工具调用。",
+                    "turn_events": ["Approval: human denied pending tool calls."],
+                },
+            )
+            return self._outcome_from_state(
+                self.state,
+                prior_message_count=prior_message_count,
+            )
+
+        approved_ids = [tool_call.id for tool_call in pending_approval.tool_calls]
+        resume_state = cast(
+            MokioclawState,
+            {
+                **self.state,
+                "pending_approval": None,
+                "approved_tool_call_ids": approved_ids,
+                "final_response": "",
+                "turn_events": ["Approval: human approved pending tool calls."],
+            },
+        )
+        try:
+            result = cast(
+                MokioclawState,
+                self.graph.invoke(
+                    resume_state,
+                    config={"recursion_limit": DEFAULT_RECURSION_LIMIT},
+                ),
+            )
+        except GraphRecursionError:
+            return LoopOutcome(
+                need_tool=True,
+                raw="Loop Guard: stopped approved execution after recursion limit.",
+                response="审批后的执行仍然反复循环，我已停止本轮执行。",
+                tool_calls=[],
+            )
+        result["approved_tool_call_ids"] = []
+        self.state = result
+        return self._outcome_from_state(result, prior_message_count=prior_message_count)
+
     def compact_session(self, focus: str | None = None) -> LoopOutcome:
         if self.state is None or not self.state.get("messages"):
             return LoopOutcome(
@@ -939,25 +1134,52 @@ class MokioclawSession:
                 memory=[f"User request: {user_input}"],
             )
         self.state = result
-        current_turn_messages = result["messages"][prior_message_count:]
-        tool_calls = collect_tool_executions(current_turn_messages)
-        raw = render_turn_trace(result.get("turn_events", []), current_turn_messages)
+        outcome = self._outcome_from_state(
+            result,
+            prior_message_count=prior_message_count,
+        )
         if auto_compaction_note:
-            raw = "\n".join([auto_compaction_note, raw])
+            return LoopOutcome(
+                need_tool=outcome.need_tool,
+                raw="\n".join([auto_compaction_note, outcome.raw]),
+                response=outcome.response,
+                tool_calls=outcome.tool_calls,
+                todos=outcome.todos,
+                notepad=outcome.notepad,
+                memory=outcome.memory,
+                verification_nudge=outcome.verification_nudge,
+                tool_error=outcome.tool_error,
+                pending_approval=outcome.pending_approval,
+            )
+        return outcome
 
-        active_todos = coerce_todo_snapshots(result.get("todos"))
+    def _outcome_from_state(
+        self,
+        state: MokioclawState,
+        *,
+        prior_message_count: int,
+    ) -> LoopOutcome:
+        current_turn_messages = state["messages"][prior_message_count:]
+        tool_calls = collect_tool_executions(current_turn_messages)
+        raw = render_turn_trace(state.get("turn_events", []), current_turn_messages)
+        active_todos = coerce_todo_snapshots(state.get("todos"))
+        pending_approval = state.get("pending_approval")
         return LoopOutcome(
-            need_tool=bool(tool_calls),
+            need_tool=bool(tool_calls) or bool(pending_approval),
             raw=raw,
             response=(
-                result.get("final_response")
+                state.get("final_response")
                 or extract_final_response(current_turn_messages)
             ),
             tool_calls=tool_calls,
             todos=active_todos or None,
-            notepad=list(result.get("notepad", [])) or None,
-            memory=build_short_term_memory(user_input, current_turn_messages),
-            verification_nudge=result.get("verification_nudge") or None,
+            notepad=list(state.get("notepad", [])) or None,
+            memory=build_short_term_memory(
+                state.get("user_input", ""),
+                current_turn_messages,
+            ),
+            verification_nudge=state.get("verification_nudge") or None,
+            pending_approval=pending_approval,
         )
 
     def _run_casual_turn(self, user_input: str) -> LoopOutcome:
@@ -975,6 +1197,7 @@ class MokioclawSession:
             )
         )
         response_text = _stringify_content(ai_message.content)
+        ai_message = AIMessage(content=response_text)
         turn_messages = [human_message, ai_message]
 
         if self.state is None:
@@ -1006,6 +1229,8 @@ class MokioclawSession:
                     "last_clarification_signature": "",
                     "final_response": response_text,
                     "verification_nudge": "",
+                    "pending_approval": None,
+                    "approved_tool_call_ids": [],
                     "turn_events": [
                         "Chat: handled this turn as normal conversation."
                     ],
@@ -1165,6 +1390,8 @@ class MokioclawSession:
                     ),
                     "final_response": "",
                     "verification_nudge": "",
+                    "pending_approval": None,
+                    "approved_tool_call_ids": [],
                     "turn_events": [],
                 },
             )
