@@ -62,6 +62,8 @@ def test_textual_app_renders_shell():
             assert app.query_one("#chat-input", ChatComposer)
             assert app.query_one("#composer-prefix", Static)
             assert app.query_one("#conversation-zone")
+            assert app.query_one("#welcome-card")
+            assert app.query_one("#logo-mark", Static)
             assert app.query_one("#approval-panel")
             assert app.query_one("#verification-panel")
             assert len(app.query(".todo-card")) == 0
@@ -85,6 +87,11 @@ def test_textual_app_submits_input_and_streams_assistant_response():
             assert len(app.query(".chat-card.user")) == 1
             assert len(app.query(".chat-card.thinking")) == 0
             assert len(app.query(".chat-card.assistant")) == 1
+            assert all(
+                "Selecting tools" not in card.content
+                and "Checking approvals" not in card.content
+                for card in app.query(".chat-card")
+            )
             assistant_card = app.query(".chat-card.assistant").last()
             assert "整理完成" in assistant_card.content
             assert len(app.query(".todo-card")) == 0
@@ -183,6 +190,26 @@ def test_textual_todo_and_notepad_commands_render_snapshots_in_chat():
     asyncio.run(_run())
 
 
+def test_textual_help_command_renders_grouped_command_card():
+    async def _run() -> None:
+        app = MokioclawTextualApp(model="demo-model", session=FakeSession())
+        async with app.run_test(size=(140, 40)) as pilot:
+            await pilot.pause()
+            input_widget = app.query_one("#chat-input", ChatComposer)
+            input_widget.load_text("/help")
+            await pilot.press("enter")
+            await pilot.pause(0.2)
+
+            help_card = app.query(".chat-card.system").last()
+            assert "## Commands" in help_card.content
+            assert "**Session**" in help_card.content
+            assert "**State**" in help_card.content
+            assert "**Approval**" in help_card.content
+
+    asyncio.run(_run())
+
+
+
 def test_textual_busy_state_marks_composer_shell():
     async def _run() -> None:
         app = MokioclawTextualApp(model="demo-model", session=FakeSession())
@@ -213,9 +240,9 @@ def test_textual_app_clear_command_resets_session():
             assert session.reset_calls == 1
             assert len(app.query(".todo-card")) == 0
             assert len(app.query(".note-card")) == 0
-            welcome_card = app.query(".chat-card.system").last()
-            assert "/todo" in welcome_card.content
-            assert "/notepad" in welcome_card.content
+            assert app.query_one("#welcome-card")
+            assert app.query_one("#command-cheatsheet")
+            assert app.query_one("#logo-mark", Static)
 
     asyncio.run(_run())
 

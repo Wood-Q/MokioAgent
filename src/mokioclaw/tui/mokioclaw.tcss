@@ -1,21 +1,21 @@
 Screen {
-    background: #f5f2ec;
-    color: #26211d;
+    background: #0f0e0d;
+    color: #d8d1c7;
     padding: 0 1;
 }
 
 Header {
     dock: top;
-    background: #f5f2ec;
-    color: #3b342e;
-    border-bottom: solid #d7d1c7;
+    background: #0f0e0d;
+    color: #d8d1c7;
+    border-bottom: solid #d8704a;
 }
 
 Footer {
     dock: bottom;
-    background: #f5f2ec;
-    color: #8e877f;
-    border-top: solid #d7d1c7;
+    background: #0f0e0d;
+    color: #807973;
+    border-top: solid #3a3430;
 }
 
 #shell {
@@ -37,7 +37,7 @@ Footer {
 
 #conversation-title,
 #sidebar-title {
-    color: #6f665d;
+    color: #a35f49;
     text-style: bold;
     padding: 0 1;
     margin-bottom: 1;
@@ -45,9 +45,70 @@ Footer {
 
 #chat-scroll {
     height: 1fr;
-    border: round #ea7b2f;
-    background: #fbf8f3;
+    border: round #d8704a;
+    background: #151311;
     padding: 1;
+}
+
+#welcome-card {
+    width: 100%;
+    height: 22;
+    margin-bottom: 1;
+    border: round #d8704a;
+    background: #12100f;
+}
+
+#welcome-left {
+    width: 52;
+    min-width: 46;
+    align: center top;
+    padding: 1 1;
+    border-right: solid #3a3430;
+}
+
+#welcome-right {
+    width: 1fr;
+    padding: 1 2;
+}
+
+#logo-mark {
+    content-align: center top;
+    height: 10;
+    width: 48;
+    margin-bottom: 1;
+}
+
+#welcome-title {
+    color: #f1e7dc;
+    text-style: bold;
+    content-align: center middle;
+    margin-top: 1;
+}
+
+#welcome-meta {
+    color: #8b8580;
+    content-align: center middle;
+    margin-top: 1;
+}
+
+.welcome-section-title {
+    color: #a35f49;
+    text-style: bold;
+    margin-bottom: 0;
+}
+
+.welcome-line {
+    color: #c9c1b8;
+    margin-bottom: 1;
+}
+
+.welcome-line.muted {
+    color: #7a736d;
+}
+
+#command-cheatsheet {
+    color: #d8d1c7;
+    margin-bottom: 1;
 }
 
 .chat-card {
@@ -55,72 +116,72 @@ Footer {
     height: auto;
     margin-bottom: 1;
     padding: 0 1 1 1;
-    border: round #d8d1c7;
-    background: #fffdf9;
+    border: round #3a3430;
+    background: #181614;
 }
 
 .chat-card .chat-kicker {
-    color: #5d554d;
+    color: #9f978f;
     text-style: bold;
     padding: 0 0 1 0;
 }
 
 .chat-card .chat-plain,
 .chat-card .chat-markdown {
-    color: #26211d;
+    color: #e0d8ce;
 }
 
 .chat-card.user {
-    border: round #ea7b2f 65%;
+    border: round #d8704a;
 }
 
 .chat-card.user .chat-kicker {
-    color: #bf6431;
+    color: #d8704a;
 }
 
 .chat-card.assistant {
-    border: round #d8d1c7;
+    border: round #5a524c;
 }
 
 .chat-card.assistant .chat-kicker {
-    color: #35302b;
+    color: #f1e7dc;
 }
 
 .chat-card.system {
-    border: round #ea7b2f 35%;
-    background: #fcfaf6;
+    border: round #d8704a 55%;
+    background: #151311;
 }
 
 .chat-card.thinking {
-    border: round #d89555 50%;
-    background: #fff4e8;
+    border: round #d8704a 70%;
+    background: #201812;
 }
 
 .chat-card.thinking .chat-kicker,
 .chat-card.thinking .chat-markdown {
-    color: #9a5427;
+    color: #d8704a;
 }
 
 .chat-card.error {
-    border: round #d86255 70%;
-    background: #fff7f5;
+    border: round #d86255 80%;
+    background: #211311;
 }
 
 #composer-shell {
     height: auto;
     margin-top: 1;
     padding: 0 1 1 1;
-    border: round #ea7b2f;
-    background: #fbf8f3;
+    border: solid #3a3430;
+    background: #151311;
 }
 
 #composer-shell.busy {
-    border: round #d89555;
-    background: #fff4e8;
+    border: solid #d8704a;
+    background: #201812;
 }
 
 #composer-help {
-    color: #7f766e;
+    color: #807973;
     height: auto;
     padding: 1 0 0 0;
 }
@@ -131,13 +192,13 @@ Footer {
     max-height: 5;
     margin-top: 1;
     padding: 0;
-    border-top: solid #ddd6cc;
+    border-top: solid #3a3430;
     align: left top;
 }
 
 #composer-prefix {
     width: 3;
-    color: #bf6431;
+    color: #d8704a;
     text-style: bold;
     padding: 0 0 0 1;
 }
@@ -149,7 +210,7 @@ Footer {
     max-height: 5;
     border: none;
     background: transparent;
-    color: #26211d;
+    color: #e0d8ce;
     padding: 0;
 }
 
@@ -158,19 +219,19 @@ Footer {
 }
 
 #chat-input:disabled {
-    color: #9d958c;
+    color: #807973;
 }
 
 .side-panel {
     margin-bottom: 1;
     padding: 1;
-    border: round #ea7b2f 35%;
-    background: #fbf8f3;
+    border: round #5a524c;
+    background: #151311;
     height: 1fr;
 }
 
 .panel-title {
-    color: #bf6431;
+    color: #d8704a;
     text-style: bold;
     padding: 0 0 1 0;
 }
@@ -188,20 +249,20 @@ Footer {
 }
 
 .empty-panel-message {
-    color: #9a9289;
+    color: #807973;
     padding: 1 0;
 }
 
 .approval-panel {
-    border: round #d86255 65%;
-    background: #fff7f5;
+    border: round #d86255 80%;
+    background: #211311;
     height: auto;
 }
 
 #approval-text {
-    color: #8e3f33;
+    color: #e89282;
 }
 
 #verification-text {
-    color: #8e3f33;
+    color: #e89282;
 }

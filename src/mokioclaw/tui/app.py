@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
 
+from rich_pixels import HalfcellRenderer, Pixels
 from textual import on, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -31,14 +32,14 @@ APPROVE_COMMANDS = {"/approve", "approve"}
 DENY_COMMANDS = {"/deny", "deny"}
 TODO_COMMANDS = {"/todo", "todo"}
 NOTEPAD_COMMANDS = {"/notepad", "notepad"}
+LOGO_IMAGE_PATH = Path(__file__).resolve().parents[3] / "logo with no words.png"
 TYPEWRITER_CHUNK_SIZE = 12
 TYPEWRITER_DELAY_SECONDS = 0.01
 THINKING_TICK_SECONDS = 0.35
 THINKING_STEPS = (
-    "Planning request...",
-    "Selecting tools...",
-    "Checking approvals...",
-    "Waiting for model response...",
+    "Thinking",
+    "Reading the conversation",
+    "Waiting for response",
 )
 
 
@@ -57,6 +58,35 @@ class SessionLike(Protocol):
     def resolve_pending_approval(self, approved: bool) -> LoopOutcome: ...
 
     def reset(self) -> None: ...
+
+
+class WelcomePanel(Widget):
+    def compose(self) -> ComposeResult:
+        with Horizontal(id="welcome-card"):
+            with Vertical(id="welcome-left"):
+                yield Static(_logo_mark(), id="logo-mark")
+                yield Static("Welcome back!", id="welcome-title")
+                yield Static("MokioAgent · Textual Session", id="welcome-meta")
+            with Vertical(id="welcome-right"):
+                yield Static(
+                    "Tips for getting started",
+                    classes="welcome-section-title",
+                )
+                yield Static(
+                    "Run /help to list slash commands",
+                    classes="welcome-line",
+                )
+                yield Static(
+                    "Use /todo or /notepad to inspect saved state",
+                    classes="welcome-line",
+                )
+                yield Static("Commands", classes="welcome-section-title")
+                yield Markdown(
+                    _command_help_markdown(compact=True),
+                    id="command-cheatsheet",
+                )
+                yield Static("Recent activity", classes="welcome-section-title")
+                yield Static("No recent activity", classes="welcome-line muted")
 
 
 class ChatCard(Widget):
@@ -163,25 +193,9 @@ class MokioclawTextualApp(App[None]):
             with Vertical(id="conversation-zone"):
                 yield Static("Conversation", id="conversation-title")
                 with VerticalScroll(id="chat-scroll"):
-                    yield ChatCard(
-                        role="system",
-                        content=(
-                            "## Welcome\n\n"
-                            "- 普通聊天会直接回复，不会自动当成任务执行。\n"
-                            "- 需要整理文件、修改内容或查看目录时，我会进入工作流。\n"
-                            "- 写入、编辑或移动文件前会请求 human approval。\n"
-                            "- Todo 与 NotePad 不常驻侧栏，输入 `/todo` 或 `/notepad` "
-                            "查看快照。\n"
-                            "- `/approve` 继续，`/deny` 拒绝，`/compact` 压缩上下文，"
-                            "`/clear` 重置会话。"
-                        ),
-                    )
+                    yield WelcomePanel()
                 with Container(id="composer-shell"):
-                    yield Static(
-                        "Enter 发送 · Shift+Enter 换行 · "
-                        "/todo · /notepad · /approve · /deny · /compact · /clear",
-                        id="composer-help",
-                    )
+                    yield Static(_composer_hint(), id="composer-help")
                     with Horizontal(id="composer-row"):
                         yield Static("›", id="composer-prefix")
                         yield ChatComposer(
@@ -240,20 +254,7 @@ class MokioclawTextualApp(App[None]):
             await self._mount_chat_card(
                 ChatCard(
                     role="system",
-                    content=(
-                        "## Commands\n\n"
-                        "- `/help`: show this help card\n"
-                        "- `/todo`: show the latest todo snapshot in chat\n"
-                        "- `/notepad`: show saved notepad entries in chat\n"
-                        "- `/approve`: approve pending tool calls\n"
-                        "- `/deny`: deny pending tool calls\n"
-                        "- `/compact [focus]`: compact the session context\n"
-                        "- `/clear`: reset the conversation and runtime panels\n"
-                        "- `/exit`: quit the app\n\n"
-                        "Thinking and assistant responses stream inline. "
-                        "Todo and NotePad are shown on demand instead of "
-                        "as persistent side panels."
-                    ),
+                    content=_command_help_markdown(compact=False),
                 )
             )
             return
@@ -375,11 +376,7 @@ class MokioclawTextualApp(App[None]):
         await self._mount_chat_card(ChatCard(role="user", content=user_input))
         pending_card = ChatCard(
             role="thinking",
-            content=(
-                "### Thinking\n\n"
-                "Reviewing the latest message and preparing a reply. "
-                "Use `/todo` or `/notepad` after the turn to inspect saved state."
-            ),
+            content="### Thinking\n\nWaiting for response...",
         )
         self._pending_card = pending_card
         await self._mount_chat_card(pending_card)
@@ -397,7 +394,7 @@ class MokioclawTextualApp(App[None]):
         pending_card = ChatCard(
             role="thinking",
             content=(
-                "### Resolving Approval\n\n"
+                "### Resolving approval\n\n"
                 "Applying the human approval decision to the pending tool call."
             ),
         )
@@ -415,7 +412,7 @@ class MokioclawTextualApp(App[None]):
         pending_card = ChatCard(
             role="thinking",
             content=(
-                "### Compacting\n\n"
+                "### Compacting context\n\n"
                 "Compressing the current session context so later turns can "
                 "continue with a smaller prompt window."
             ),
@@ -438,20 +435,7 @@ class MokioclawTextualApp(App[None]):
     async def _replace_chat_with_welcome(self) -> None:
         chat_scroll = self.query_one("#chat-scroll", VerticalScroll)
         await chat_scroll.remove_children()
-        await chat_scroll.mount(
-            ChatCard(
-                role="system",
-                content=(
-                    "## Welcome\n\n"
-                    "- 普通聊天会直接回复，不会自动当成任务执行。\n"
-                    "- 需要整理文件、修改内容或查看目录时，我会进入工作流。\n"
-                    "- Thinking 与回答会在对话区流式渲染。\n"
-                    "- Todo 与 NotePad 不常驻侧栏，输入 `/todo` 或 `/notepad` "
-                    "查看快照。\n"
-                    "- `/compact` 可主动压缩上下文，`/clear` 重置会话。"
-                ),
-            )
-        )
+        await chat_scroll.mount(WelcomePanel())
         chat_scroll.scroll_end(animate=False)
 
     async def _mount_chat_card(self, card: ChatCard) -> None:
@@ -526,10 +510,7 @@ class MokioclawTextualApp(App[None]):
             help_widget.update("正在处理这一轮消息...")
             self.sub_title = f"Textual Session · {self.model} · Running"
         else:
-            help_widget.update(
-                "Enter 发送 · Shift+Enter 换行 · "
-                "/todo · /notepad · /compact · /clear · /exit"
-            )
+            help_widget.update(_composer_hint())
             self.sub_title = f"Textual Session · {self.model}"
             input_widget.focus()
 
@@ -543,6 +524,43 @@ def run_textual_chat(*, message: str | None, model: str) -> int:
     app.run()
     return 0
 
+
+
+def _logo_mark() -> Pixels:
+    return Pixels.from_image_path(
+        LOGO_IMAGE_PATH,
+        resize=(44, 18),
+        renderer=HalfcellRenderer(default_color="#12100f"),
+    )
+
+
+def _command_help_markdown(*, compact: bool) -> str:
+    if compact:
+        return (
+            "`/help` commands · `/todo` checklist · `/notepad` notes · "
+            "`/compact` context · `/clear` reset"
+        )
+    return (
+        "## Commands\n\n"
+        "**Session**\n"
+        "- `/clear` reset the conversation and runtime panels\n"
+        "- `/compact [focus]` compact the session context\n"
+        "- `/exit` quit the app\n\n"
+        "**State**\n"
+        "- `/todo` show the latest todo snapshot in chat\n"
+        "- `/notepad` show saved notepad entries in chat\n\n"
+        "**Approval**\n"
+        "- `/approve` approve pending tool calls\n"
+        "- `/deny` deny pending tool calls\n\n"
+        "**Help**\n"
+        "- `/help` show this command card\n\n"
+        "Thinking and assistant responses stream inline. Todo and NotePad "
+        "are shown on demand instead of as persistent side panels."
+    )
+
+
+def _composer_hint() -> str:
+    return "/help for commands · Enter to send · Shift+Enter newline · Ctrl+Q quit"
 
 
 def _role_label(role: str) -> str:
