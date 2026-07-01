@@ -82,16 +82,24 @@ def main() -> None:
     print("\nLangChain 解析出的 tool_calls:")
     print(response.tool_calls)
 
+    # 按 name 分发到对应的工具，避免硬编码 get_weather
+    tool_map = {"get_weather": get_weather, "get_time": get_time}
+
+    messages.append(response)
     for tool_call in response.tool_calls:
         print("\n准备执行工具:")
         print(f"tool_name = {tool_call['name']}")
         print(f"tool_args = {tool_call['args']}")
 
-        result = get_weather.invoke(tool_call["args"])
+        tool = tool_map.get(tool_call["name"])
+        if tool is None:
+            result = f"未知工具：{tool_call['name']}"
+        else:
+            result = tool.invoke(tool_call["args"])
+
         print("\n工具执行结果:")
         print(result)
 
-        messages.append(response)
         messages.append(
             ToolMessage(
                 content=result,
