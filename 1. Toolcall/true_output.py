@@ -11,7 +11,7 @@ from openai import OpenAI
 def main() -> None:
     load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
-    model = "qwen3.6-flash"
+    model = os.getenv("MODEL", "qwen3.6-flash")
 
     client = OpenAI(
         base_url=os.getenv("BASE_URL"),
